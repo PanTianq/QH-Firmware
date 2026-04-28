@@ -1,0 +1,46 @@
+{
+  "protocol_version": "1.0",
+  "description": "串口通信协议定义",
+  "interval_unit": "ms",
+  "zero_interval_meaning": "单次发送不重复",
+  "commands": [
+    {
+      "name": "握手",
+      "command": "update link {device_model} {firmware_region}",
+      "interval": 5,
+      "confirmation": "update link {device_model} {firmware_region} ok"
+    },
+    {
+      "name": "获取设备信息",
+      "command": "update inform 1",
+      "interval": 50,
+      "confirmation": "update inform {device_info_read} ok"
+    },
+    {
+      "name": "写入设备信息",
+      "command": "update inform 0 {device_info_write}",
+      "interval": 50,
+      "confirmation": "update inform 0 ok"
+    },
+    {
+      "name": "固件头",
+      "command": "update load",
+      "interval": 0,
+      "confirmation": "update load {total_packets} {current_packet} ok"
+    },
+    {
+      "name": "设备软重启",
+      "command": "update control 1",
+      "interval": 0,
+      "confirmation": "update control 1 ok"
+    }
+  ],
+  "variables": {
+    "device_model": "设备型号",
+    "firmware_region": "烧写固件的区域",
+    "device_info_read": "读取的设备信息",
+    "device_info_write": "写入的设备信息",
+    "total_packets": "总包数",
+    "current_packet": "当前包号"
+  }
+}
