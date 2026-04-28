@@ -12,19 +12,19 @@
     },
     {
       "name": "获取设备信息",
-      "command": "update inform 1",
+      "command": "update inform 0",
       "interval": 50,
-      "confirmation": "update inform {device_info_read} ok"
+      "confirmation": "update inform 0 {device_info_read} ok"
     },
     {
       "name": "写入设备信息",
-      "command": "update inform 0 {device_info_write}",
-      "interval": 50,
-      "confirmation": "update inform 0 ok"
+      "command": "update inform 1 {device_info_write}",
+      "interval": 0,
+      "confirmation": "update inform 1 ok"
     },
     {
       "name": "固件头",
-      "command": "update load",
+      "command": "update load {total_packets} {current_packet}",
       "interval": 0,
       "confirmation": "update load {total_packets} {current_packet} ok"
     },

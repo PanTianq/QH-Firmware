@@ -2,83 +2,151 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
-using System.IO.Ports;
 using System.Linq;
-using System.Web.Script.Serialization;
+using System.Text;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 
 namespace QH_Firmware
 {
+    /// <summary>
+    /// 主窗体：UI交互层，只处理界面显示和事件调用
+    /// </summary>
     public partial class Form1 : Form
     {
-        private readonly SerialPort serialPort = new SerialPort();
+        // 串口通信操作类（已独立封装）
+        private readonly SerialCommunication serialComm = new SerialCommunication();
+        // 协议加载与解析类（已独立封装）
+        private readonly ProtocolLoading protocolLoader = new ProtocolLoading();
+        // 日志输出类（已独立封装）
+        private readonly LogOutput _logOutput;
+        // 系统默认支持的波特率列表
         private static readonly int[] DefaultBaudRates = { 9600, 115200 };
-        private string currentProtocolFile = string.Empty;
-        private readonly List<string> recentProtocolFiles = new List<string>();
-        private const int MAX_RECENT_FILES = 5;
-
+        // 防止串口操作重复点击
+        private bool _isPortOperating;
+        // 工具版本号
+        private string version = "_V1.0";
+        private AutoSendTimer _handshakeTimer;
+        // 握手是否成功
+        private bool _isHandshakeSuccess;
         public Form1()
         {
             InitializeComponent();
+            // 固定窗口标题 + 版本号
+            this.Text = "QH Firmware 固件烧录工具" + version;
+            // 初始化日志组件，绑定日志显示控件
+            _logOutput = new LogOutput(richTextBox1);
+            // 窗体加载事件绑定
             Load += Form1_Load;
+            // 串口日志输出 → 转发到日志组件
+            serialComm.LogReceived += (msg, color) => _logOutput.Append(msg, color);
+            // 串口状态变化 → 更新按钮状态
+            serialComm.PortStateChanged += UpdatePortButtonState;
+            // 协议加载日志 → 转发到日志组件
+            protocolLoader.LogReceived += (msg, color) => _logOutput.Append(msg, color);
+            // 协议加载完成 → 更新状态栏并启用串口按钮
+            protocolLoader.ProtocolLoaded += (fileName, desc) =>
+            {
+                toolStripStatusLabel1.Text = $"协议：{fileName}";
+                openPortButton.Enabled = true;
+            };
+            _isHandshakeSuccess = false;
+            // 初始化自动发送
+            _handshakeTimer = new AutoSendTimer(serialComm, protocolLoader, _logOutput);
+            // 接收数据 → 验证握手
+            serialComm.DataReceived += (buffer) =>
+            {
+                string recvStr = Encoding.UTF8.GetString(buffer);
+                if (_handshakeTimer.CheckHandshakeAck(recvStr))
+                {
+                    Invoke((MethodInvoker)delegate {
+                        _handshakeTimer.SwitchToGetInfoMode();
+                    });
+                }
+            };
         }
-
-        #region 窗体生命周期
+        /// <summary>
+        /// 窗体加载时初始化：串口、波特率、最近文件、协议自动加载
+        /// </summary>
         private void Form1_Load(object sender, EventArgs e)
         {
+            // 初始化波特率下拉框
             InitializeBaudRateComboBox();
+            // 初始化设备区域
+            InitializeRegion();
+            // 获取可用串口列表
             GetSerialPorts();
+            // 初始化最近协议文件菜单
             InitializeRecentFilesMenu();
-            LoadRecentFiles();
-
-            if (recentProtocolFiles.Count > 0)
+            // 协议是否加载成功标记
+            bool protocolLoaded = false;
+            // 加载最近使用过的协议文件记录
+            protocolLoader.LoadRecentFiles();
+            // 如果有最近文件，则尝试自动加载第一个
+            if (protocolLoader.RecentFiles.Count > 0)
             {
-                string firstProtocol = recentProtocolFiles[0];
-                if (File.Exists(firstProtocol))
+                string lastFile = protocolLoader.RecentFiles[0];
+                if (File.Exists(lastFile))
                 {
-                    LoadProtocolFile(firstProtocol);
+                    // 静默加载（不输出日志）
+                    if (protocolLoader.LoadProtocolFileSilent(lastFile))
+                    {
+                        toolStripStatusLabel1.Text = $"协议：{Path.GetFileName(lastFile)}";
+                        openPortButton.Enabled = true;
+                        protocolLoaded = true;
+                        UpdateRecentFilesMenu();
+                    }
                 }
             }
+            // 根据加载结果输出日志
+            if (protocolLoaded)
+            {
+                _logOutput.Append($"协议加载成功，协议版本：{protocolLoader.CurrentConfig.protocol_version}", Color.LimeGreen);
+            }
+            else
+            {
+                _logOutput.Append("请加载协议文件(文件-加载协议)", Color.Orange);
+                openPortButton.Enabled = false;
+            }
         }
-
+        /// <summary>
+        /// 窗体关闭时：释放串口资源
+        /// </summary>
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (serialPort != null && serialPort.IsOpen)
-            {
-                serialPort.Close();
-            }
+            serialComm.Close();
+            serialComm.Dispose();
             base.OnFormClosing(e);
         }
-        #endregion
 
         #region 串口列表&波特率
+        /// <summary>
+        /// 获取系统所有可用串口
+        /// </summary>
         private void GetSerialPorts()
         {
             try
             {
                 string selected = comboBox1.Text;
-                string[] ports = SerialPort.GetPortNames();
-
+                string[] ports = SerialCommunication.GetPortNames();
+                // 只有串口发生变化时才刷新，避免闪烁
                 if (IsComboBoxDifferent(comboBox1, ports))
                 {
                     comboBox1.BeginUpdate();
                     comboBox1.Items.Clear();
                     comboBox1.Items.AddRange(ports);
                     comboBox1.EndUpdate();
-
+                    // 保持原来选中的串口（如果存在）
                     comboBox1.SelectedItem = comboBox1.Items.Contains(selected)
                         ? selected
                         : comboBox1.Items.Count > 0 ? comboBox1.Items[0] : null;
                 }
             }
-            catch
-            {
-
-            }
+            catch { }
         }
-
-        private bool IsComboBoxDifferent(System.Windows.Forms.ComboBox comboBox, string[] items)
+        /// <summary>
+        /// 判断下拉框内容是否与新列表不同（用于优化刷新）
+        /// </summary>
+        private bool IsComboBoxDifferent(ComboBox comboBox, string[] items)
         {
             if (comboBox.Items.Count != items.Length)
                 return true;
@@ -90,35 +158,56 @@ namespace QH_Firmware
             }
             return false;
         }
-
+        /// <summary>
+        /// 刷新串口按钮点击事件
+        /// </summary>
         private void RefreshButton_Click(object sender, EventArgs e)
         {
             GetSerialPorts();
         }
-
+        /// <summary>
+        /// 初始化波特率下拉框默认值
+        /// </summary>
         private void InitializeBaudRateComboBox()
         {
             comboBox2.Items.Clear();
             foreach (int rate in DefaultBaudRates)
                 comboBox2.Items.Add(rate.ToString());
+            // 默认选中 115200
             comboBox2.SelectedItem = "115200";
         }
         #endregion
 
         #region 串口开关控制
-        private bool _isPortOperating;
+        /// <summary>
+        /// 打开/关闭串口按钮点击事件
+        /// </summary>
         private void openPortButton_Click(object sender, EventArgs e)
         {
+            // 防止重复点击
             if (_isPortOperating) return;
             try
             {
                 _isPortOperating = true;
                 openPortButton.Enabled = false;
 
-                if (!serialPort.IsOpen)
-                    OpenSerialPort();
+                if (!serialComm.IsOpen)
+                {
+                    int baudRate = int.Parse(comboBox2.Text);
+                    serialComm.Open(comboBox1.Text, baudRate);
+                    toolStripStatusLabel1.Text = $"{comboBox1.Text}@{comboBox2.Text} 协议: {Path.GetFileName(protocolLoader.CurrentFilePath)}";
+                    // 从UI控件获取值，传入定时器
+                    string deviceModel = textBox1.Text.Trim();
+                    string firmwareRegion = comboBox3.SelectedIndex.ToString(); // 直接用索引作为数字
+                    _handshakeTimer.StartHandshake(deviceModel, firmwareRegion);
+                }
                 else
-                    CloseSerialPort();
+                {
+                    // 打开串口
+                    serialComm.Close();
+                    _handshakeTimer.Stop();
+                    toolStripStatusLabel1.Text = "就绪";
+                }
             }
             finally
             {
@@ -126,139 +215,37 @@ namespace QH_Firmware
                 openPortButton.Enabled = true;
             }
         }
-
-        private void OpenSerialPort()
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(currentProtocolFile))
-                {
-                    AppendLog("[错误] 请先加载协议文件再打开串口", Color.Orange);
-                    return;
-                }
-                if (string.IsNullOrEmpty(comboBox1.Text) || string.IsNullOrEmpty(comboBox2.Text))
-                {
-                    return;
-                }
-
-                serialPort.PortName = comboBox1.Text;
-                serialPort.BaudRate = int.Parse(comboBox2.Text);
-                serialPort.DataBits = 8;
-                serialPort.StopBits = StopBits.One;
-                serialPort.Parity = Parity.None;
-                serialPort.Handshake = Handshake.None;
-
-                serialPort.Open();
-                UpdatePortButtonState(true);
-                toolStripStatusLabel1.Text = $"{comboBox1.Text}@{comboBox2.Text} 协议: {Path.GetFileName(currentProtocolFile)}";
-                AppendLog("打开串口成功", Color.LimeGreen);
-            }
-            catch (Exception ex)
-            {
-                string err = GetErrorMessageInChinese(ex);
-                AppendLog($"[错误] 打开串口失败: {err}", Color.Orange);
-                UpdatePortButtonState(false);
-            }
-        }
-
-        private void CloseSerialPort()
-        {
-            try
-            {
-                if (serialPort.IsOpen)
-                    serialPort.Close();
-
-                UpdatePortButtonState(false);
-                toolStripStatusLabel1.Text = "就绪";
-                AppendLog("关闭串口成功", Color.LimeGreen);
-            }
-            catch (Exception ex)
-            {
-                string err = GetErrorMessageInChinese(ex);
-                AppendLog($"[错误] 关闭串口失败: {err}", Color.Orange);
-            }
-        }
-
+        /// <summary>
+        /// 根据串口状态更新按钮文字、颜色、控件可用性
+        /// </summary>
         private void UpdatePortButtonState(bool isOpen)
         {
+            // 跨线程调用UI必须用 Invoke
             if (openPortButton.InvokeRequired)
             {
                 openPortButton.Invoke(new Action<bool>(UpdatePortButtonState), isOpen);
                 return;
             }
-
+            // 更新按钮显示
             openPortButton.Text = isOpen ? "关闭串口" : "打开串口";
             openPortButton.BackColor = isOpen
-                ? Color.FromArgb(220, 20, 60)
-                : Color.FromArgb(34, 139, 34);
-
+                ? Color.FromArgb(220, 20, 60)// 红色：已打开
+                : Color.FromArgb(34, 139, 34); // 绿色：已关闭
+            // 打开串口后禁止修改串口号和波特率
             comboBox1.Enabled = !isOpen;
             comboBox2.Enabled = !isOpen;
             refreshButton.Enabled = !isOpen;
         }
-
-        private string GetErrorMessageInChinese(Exception ex)
-        {
-            string msg = ex.Message.ToLower();
-            if (msg.Contains("access") && msg.Contains("denied"))
-                return "串口被占用或无权限";
-            if (msg.Contains("port") && msg.Contains("not exist"))
-                return "串口不存在";
-            if (msg.Contains("already open"))
-                return "串口已打开";
-            if (msg.Contains("timeout"))
-                return "操作超时";
-            if (msg.Contains("invalid operation"))
-                return "无效操作";
-            if (ex is UnauthorizedAccessException)
-                return "访问被拒绝";
-            return ex.Message;
-        }
         #endregion
 
-        #region 日志
-        private void AppendLog(string message, Color color)
-        {
-            if (!richTextBox1.Visible) return;
-
-            if (richTextBox1.InvokeRequired)
-            {
-                richTextBox1.BeginInvoke(new Action<string, Color>(AppendLog), message, color);
-                return;
-            }
-
-            richTextBox1.SelectionStart = richTextBox1.TextLength;
-            richTextBox1.SelectionLength = 0;
-            richTextBox1.SelectionColor = color;
-            richTextBox1.AppendText($"{DateTime.Now:HH:mm:ss} {message}\r\n");
-            richTextBox1.SelectionColor = richTextBox1.ForeColor;
-            richTextBox1.ScrollToCaret();
-        }
-        #endregion
-
-        #region 协议实体类
-        public class ProtocolConfig
-        {
-            public string protocol_version { get; set; }
-            public string description { get; set; }
-            public string interval_unit { get; set; }
-            public string zero_interval_meaning { get; set; }
-            public List<ProtocolCommand> commands { get; set; }
-            public Dictionary<string, string> variables { get; set; }
-        }
-
-        public class ProtocolCommand
-        {
-            public string name { get; set; }
-            public string command { get; set; }
-            public int interval { get; set; }
-            public string confirmation { get; set; }
-        }
-        #endregion
-
-        #region 协议文件加载 & 最近文件
+        #region 协议文件加载 & 最近文件菜单
+        /// <summary>
+        /// 文件菜单点击（空实现）
+        /// </summary>
         private void 文件FToolStripMenuItem_Click(object sender, EventArgs e) { }
-
+        /// <summary>
+        /// 手动加载协议文件
+        /// </summary>
         private void LoadProtocolMenuItem_Click(object sender, EventArgs e)
         {
             using (OpenFileDialog od = new OpenFileDialog())
@@ -269,98 +256,61 @@ namespace QH_Firmware
                 od.Title = "选择协议文件";
                 if (od.ShowDialog() == DialogResult.OK)
                 {
-                    LoadProtocolFile(od.FileName);
+                    protocolLoader.LoadProtocolFile(od.FileName);
+                    UpdateRecentFilesMenu();
                 }
             }
         }
-
+        /// <summary>
+        /// 清除所有协议历史记录（同时清空当前加载的协议）
+        /// </summary>
         private void ClearHistoryItem_Click(object sender, EventArgs e)
         {
-            if (MessageBox.Show("确定清除最近文件记录？", "提示",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+            if (MessageBox.Show("确定清除最近文件记录？", "提示", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             {
-                recentProtocolFiles.Clear();
+                // 清除历史记录文件
+                protocolLoader.ClearAllHistory();
+                // 清空当前加载的协议
+                protocolLoader.CurrentConfig = null;
+                protocolLoader.CurrentFilePath = string.Empty;
+                // 更新界面
                 UpdateRecentFilesMenu();
-                SaveRecentFiles();
-                AppendLog("已清除历史记录", Color.LimeGreen);
+                toolStripStatusLabel1.Text = "就绪";
+                openPortButton.Enabled = false;
             }
         }
-
+        /// <summary>
+        /// 点击最近文件列表，快速加载协议
+        /// </summary>
         private void RecentFileItem_Click(object sender, EventArgs e)
         {
             if (sender is ToolStripMenuItem item && item.Tag is string path)
             {
-                LoadProtocolFile(path);
+                protocolLoader.LoadProtocolFile(path);
             }
         }
-
-        private bool _isLoadingProtocol;
-        private void LoadProtocolFile(string filePath)
-        {
-            if (_isLoadingProtocol) return;
-            try
-            {
-                _isLoadingProtocol = true;
-
-                if (!File.Exists(filePath))
-                {
-                    AppendLog($"协议文件不存在：{filePath}", Color.Orange);
-                    return;
-                }
-
-                if (!Path.GetExtension(filePath).Equals(".json", StringComparison.OrdinalIgnoreCase))
-                {
-                    AppendLog("请选择 .json 协议文件", Color.Orange);
-                    return;
-                }
-
-                string json = File.ReadAllText(filePath);
-                JavaScriptSerializer jss = new JavaScriptSerializer();
-                ProtocolConfig config = jss.Deserialize<ProtocolConfig>(json);
-
-                if (config == null)
-                {
-                    AppendLog("协议JSON格式错误", Color.Orange);
-                    return;
-                }
-
-                currentProtocolFile = filePath;
-                openPortButton.Enabled = true;
-
-                AddToRecentFiles(filePath);
-                SaveLastProtocolFile(filePath);
-
-                toolStripStatusLabel1.Text = $"协议：{Path.GetFileName(filePath)}";
-                AppendLog($"加载协议成功：{Path.GetFileName(filePath)}", Color.LimeGreen);
-                AppendLog($"版本：{config.protocol_version}，描述：{config.description}", Color.LimeGreen);
-                Text = $"Firmware - {Path.GetFileName(filePath)}";
-            }
-            catch (Exception ex)
-            {
-                AppendLog($"加载协议失败：{ex.Message}", Color.Orange);
-            }
-            finally
-            {
-                _isLoadingProtocol = false;
-            }
-        }
-
+        /// <summary>
+        /// 初始化最近文件菜单
+        /// </summary>
         private void InitializeRecentFilesMenu()
         {
             recentFilesToolStripMenuItem1.DropDownItems.Clear();
             UpdateRecentFilesMenu();
         }
-
+        /// <summary>
+        /// 更新最近文件菜单显示
+        /// </summary>
         private void UpdateRecentFilesMenu()
         {
             recentFilesToolStripMenuItem1.DropDownItems.Clear();
-            if (recentProtocolFiles.Count == 0)
+            // 无历史记录时显示灰色“无”
+            if (protocolLoader.RecentFiles.Count == 0)
             {
                 recentFilesToolStripMenuItem1.DropDownItems.Add(new ToolStripMenuItem("(无)") { Enabled = false });
                 return;
             }
-
-            foreach (var file in recentProtocolFiles)
+            // 添加所有最近文件
+            foreach (var file in protocolLoader.RecentFiles)
             {
                 if (!File.Exists(file)) continue;
                 string name = Path.GetFileName(file);
@@ -372,93 +322,47 @@ namespace QH_Firmware
                 item.Click += RecentFileItem_Click;
                 recentFilesToolStripMenuItem1.DropDownItems.Add(item);
             }
-
+            // 添加分隔线 + 清除历史按钮
             recentFilesToolStripMenuItem1.DropDownItems.Add(new ToolStripSeparator());
             ToolStripMenuItem clear = new ToolStripMenuItem("清除历史记录");
             clear.Click += ClearHistoryItem_Click;
             recentFilesToolStripMenuItem1.DropDownItems.Add(clear);
         }
-
-        private void AddToRecentFiles(string filePath)
+        #endregion
+        #region 设备区域p
+        private void textBox1_TextChanged(object sender, EventArgs e)
         {
-            recentProtocolFiles.RemoveAll(x =>
-                x.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-            recentProtocolFiles.Insert(0, filePath);
-            if (recentProtocolFiles.Count > MAX_RECENT_FILES)
-                recentProtocolFiles.RemoveAt(MAX_RECENT_FILES);
-
-            UpdateRecentFilesMenu();
-            SaveRecentFiles();
+            // 保存值
+            Properties.Settings.Default.textBox1Value = textBox1.Text;
+            Properties.Settings.Default.Save();
         }
-
-        private void LoadRecentFiles()
+        private void comboBox3_SelectedIndexChanged(object sender, EventArgs e)
         {
-            try
-            {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "FirmwareTool");
-                string file = Path.Combine(dir, "recentFiles.txt");
-                if (File.Exists(file))
-                {
-                    var lines = File.ReadAllLines(file);
-                    recentProtocolFiles.AddRange(lines
-                        .Where(x => !string.IsNullOrEmpty(x) && File.Exists(x)));
-                }
-            }
-            catch
-            {
-
-            }
-            UpdateRecentFilesMenu();
+            // 保存选中索引
+            Properties.Settings.Default.comboBox3Index = comboBox3.SelectedIndex;
+            Properties.Settings.Default.Save();
         }
-
-        private void SaveRecentFiles()
+        private void InitializeRegion()
         {
-            try
+            if (string.IsNullOrEmpty(textBox1.Text))
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "FirmwareTool");
-                if (!Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                string file = Path.Combine(dir, "recentFiles.txt");
-                File.WriteAllLines(file, recentProtocolFiles);
+                textBox1.Text = "QH4011";
             }
-            catch
+            // 读取上次保存的值
+            if (Properties.Settings.Default.textBox1Value != "")
             {
+                textBox1.Text = Properties.Settings.Default.textBox1Value;
+            }
 
-            }
-        }
-
-        private void SaveLastProtocolFile(string filePath)
-        {
-            try
+            // 2. comboBox3 默认选中第 2 项（索引 1）
+            if (comboBox3.Items.Count > 1)
             {
-                string dir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "FirmwareTool");
-                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.WriteAllText(Path.Combine(dir, "lastProtocol.txt"), filePath);
+                comboBox3.SelectedIndex = 1;
             }
-            catch
+            // 读取上次保存的值
+            if (Properties.Settings.Default.comboBox3Index >= 0)
             {
-
-            }
-        }
-
-        public string LoadLastProtocolFile()
-        {
-            try
-            {
-                string path = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "FirmwareTool", "lastProtocol.txt");
-                return File.Exists(path) ? File.ReadAllText(path).Trim() : "";
-            }
-            catch
-            {
-                return "";
+                comboBox3.SelectedIndex = Properties.Settings.Default.comboBox3Index;
             }
         }
         #endregion
