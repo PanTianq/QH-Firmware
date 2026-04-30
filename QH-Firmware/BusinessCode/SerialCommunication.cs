@@ -4,7 +4,6 @@ using System.IO;
 using System.IO.Ports;
 using System.Text;
 using System.Threading;
-
 // 串口通信封装类（高性能异步收发，接收响应极快）
 namespace QH_Firmware
 {
@@ -59,16 +58,19 @@ namespace QH_Firmware
 
                 _serialPort.Open();
 
+                // 每次打开串口，重置状态
+                _isOnline = false;
+                _lastReceiveTime = DateTime.Now;
+
                 // 启动独立高速接收线程
                 StartReceiveThread();
 
                 PortStateChanged?.Invoke(true);
-                //LogReceived?.Invoke("打开串口成功", Color.LimeGreen);
                 return true;
             }
             catch (Exception ex)
             {
-                LogReceived?.Invoke($"[错误] 打开串口失败: {GetErrorMessageInChinese(ex)}", Color.Orange);
+                LogReceived?.Invoke($"[错误] 打开串口失败: {ex.Message}", Color.Orange);
                 return false;
             }
         }
@@ -86,11 +88,10 @@ namespace QH_Firmware
                     _serialPort.Close();
 
                 PortStateChanged?.Invoke(false);
-                //LogReceived?.Invoke("关闭串口成功", Color.LimeGreen);
             }
             catch (Exception ex)
             {
-                LogReceived?.Invoke($"[错误] 关闭串口失败: {GetErrorMessageInChinese(ex)}", Color.Orange);
+                LogReceived?.Invoke($"[错误] 关闭串口失败: {ex.Message}", Color.Orange);
             }
         }
 
@@ -99,15 +100,25 @@ namespace QH_Firmware
         /// </summary>
         public void Send(byte[] data)
         {
-            if (!SerialPort.IsOpen)
-                throw new InvalidOperationException("串口未打开");
+            try
+            {
+                if (!SerialPort.IsOpen)
+                    throw new InvalidOperationException("串口未打开");
 
-            //// -------------------- 【发送字符串日志】 --------------------
-            //string sendText = System.Text.Encoding.UTF8.GetString(data);
-            //LogReceived?.Invoke($"[发送] {sendText}", Color.Cyan);
-            //// -----------------------------------------------------------------
+                //// -------------------- 【发送字符串日志】 --------------------
+                //string sendText = System.Text.Encoding.UTF8.GetString(data);
+                //LogReceived?.Invoke($"[发送] {sendText}", Color.Cyan);
+                //// -----------------------------------------------------------------
+                SerialPort.Write(data, 0, data.Length);
+                
+            }
+            catch (Exception ex)
+            {
+                LogReceived?.Invoke($"[错误] 发送数据失败: {ex.Message}", Color.Orange);
+                Close();
+                return;
+            }
 
-            SerialPort.Write(data, 0, data.Length);
         }
         /// <summary>
         /// 发送字符串数据
@@ -147,62 +158,66 @@ namespace QH_Firmware
         /// <summary>
         /// 独立循环高速接收（核心：实时性极强）
         /// </summary>
+        private bool _isOnline = false;  // 联机状态：true=解析完成后永久在线
+        // 给外部提供读写接口
+        public bool IsOnline
+        {
+            get { return _isOnline; }
+            set { _isOnline = value; }
+        }
+        private DateTime _lastReceiveTime = DateTime.Now;
+        private const int ReceiveTimeoutSeconds = 20;
+        private bool _deviceInfoReceived = false;  // 开关
+
         private void ReceiveLoop()
         {
+            _lastReceiveTime = DateTime.Now;
+
             while (_isReceiving && _serialPort.IsOpen)
             {
                 try
                 {
-                    int bytesToRead = _serialPort.BytesToRead;
-                    if (bytesToRead <= 0)
+                    if (_serialPort.BytesToRead == 0)
                     {
-                        Thread.Sleep(1); // 极低延迟，不占CPU
+                        if (_serialPort.BaseStream.ReadTimeout > 0)
+                            _serialPort.BaseStream.ReadTimeout = 10;
+
+                        // 核心修改：只有未联机时，才判断20秒超时
+                        if (!_isOnline &&
+                            (DateTime.Now - _lastReceiveTime).TotalSeconds > ReceiveTimeoutSeconds)
+                        {
+                            LogReceived?.Invoke($"[超时] 20秒未接收数据，连接已断开", Color.Orange);
+                            Close();
+                            break;
+                        }
+
                         continue;
                     }
 
-                    byte[] buffer = new byte[bytesToRead];
+                    _lastReceiveTime = DateTime.Now;
+
+                    byte[] buffer = new byte[_serialPort.BytesToRead];
                     int read = _serialPort.Read(buffer, 0, buffer.Length);
 
                     if (read > 0)
                     {
-                        // -------------------- 【接收字符串日志】 --------------------
                         string recvText = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
                         LogReceived?.Invoke($"[接收] {recvText}", Color.White);
-                        // -----------------------------------------------------------------
-
                         DataReceived?.Invoke(buffer);
                     }
                 }
                 catch (TimeoutException)
                 {
-                    // 正常，无数据时触发，不处理
+                    Thread.Sleep(1);
                 }
                 catch (Exception ex)
                 {
                     if (_isReceiving)
                         LogReceived?.Invoke($"接收异常: {ex.Message}", Color.Orange);
-
                     break;
                 }
             }
         }
-
-        /// <summary>
-        /// 中文错误提示
-        /// </summary>
-        private string GetErrorMessageInChinese(Exception ex)
-        {
-            if (ex is IOException ioEx && (uint)ioEx.HResult == 0x80070020)
-                return "串口被其他程序占用";
-            if (ex is UnauthorizedAccessException)
-                return "无权限操作串口";
-            if (ex is ArgumentException && ex.Message.Contains("PortName"))
-                return "串口名称无效";
-            if (ex is TimeoutException)
-                return "操作超时";
-            return $"未知错误：{ex.Message}";
-        }
-
         public static string[] GetPortNames() => SerialPort.GetPortNames();
 
         public void Dispose()

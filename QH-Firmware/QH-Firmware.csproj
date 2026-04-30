@@ -51,6 +51,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="BusinessCode\informationParsing.cs" />
     <Compile Include="BusinessCode\LogOutput.cs" />
     <Compile Include="BusinessCode\Timer.cs" />
     <Compile Include="Form1.cs">

@@ -2,7 +2,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-
+// 自动发送定时器：握手 → 验证应答 → 定时获取信息
 namespace QH_Firmware
 {
     /// <summary>

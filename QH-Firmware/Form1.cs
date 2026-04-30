@@ -28,6 +28,8 @@ namespace QH_Firmware
         private AutoSendTimer _handshakeTimer;
         // 握手是否成功
         private bool _isHandshakeSuccess;
+        // 设备信息（键值对）
+        public Dictionary<string, string> DeviceInfo { get; set; } = new Dictionary<string, string>();
         public Form1()
         {
             InitializeComponent();
@@ -43,6 +45,8 @@ namespace QH_Firmware
             serialComm.PortStateChanged += UpdatePortButtonState;
             // 协议加载日志 → 转发到日志组件
             protocolLoader.LogReceived += (msg, color) => _logOutput.Append(msg, color);
+            
+
             // 协议加载完成 → 更新状态栏并启用串口按钮
             protocolLoader.ProtocolLoaded += (fileName, desc) =>
             {
@@ -50,19 +54,7 @@ namespace QH_Firmware
                 openPortButton.Enabled = true;
             };
             _isHandshakeSuccess = false;
-            // 初始化自动发送
-            _handshakeTimer = new AutoSendTimer(serialComm, protocolLoader, _logOutput);
-            // 接收数据 → 验证握手
-            serialComm.DataReceived += (buffer) =>
-            {
-                string recvStr = Encoding.UTF8.GetString(buffer);
-                if (_handshakeTimer.CheckHandshakeAck(recvStr))
-                {
-                    Invoke((MethodInvoker)delegate {
-                        _handshakeTimer.SwitchToGetInfoMode();
-                    });
-                }
-            };
+            protocolInteraction();
         }
         /// <summary>
         /// 窗体加载时初始化：串口、波特率、最近文件、协议自动加载
@@ -75,6 +67,7 @@ namespace QH_Firmware
             InitializeRegion();
             // 获取可用串口列表
             GetSerialPorts();
+
             // 初始化最近协议文件菜单
             InitializeRecentFilesMenu();
             // 协议是否加载成功标记
@@ -329,7 +322,7 @@ namespace QH_Firmware
             recentFilesToolStripMenuItem1.DropDownItems.Add(clear);
         }
         #endregion
-        #region 设备区域p
+        #region 设备区域
         private void textBox1_TextChanged(object sender, EventArgs e)
         {
             // 保存值
@@ -366,5 +359,114 @@ namespace QH_Firmware
             }
         }
         #endregion
+
+        #region 协议交互流程
+        //协议交互流程：握手 → 获取设备信息 → 显示到界面
+        private void protocolInteraction()
+        {
+            // 初始化自动发送
+            _handshakeTimer = new AutoSendTimer(serialComm, protocolLoader, _logOutput);
+            // 接收数据 → 验证握手
+            serialComm.DataReceived += (buffer) =>
+            {
+                string recvStr = Encoding.UTF8.GetString(buffer).Trim();
+
+                // --------------------- 握手 ---------------------
+                if (_handshakeTimer.CheckHandshakeAck(recvStr))
+                {
+                    Invoke((MethodInvoker)delegate {
+                        _handshakeTimer.SwitchToGetInfoMode();
+                    });
+                }
+
+                // --------------------- 设备信息解析 ---------------------
+                // 从协议模板中提取固定的前后缀
+                string ackTemplate = protocolLoader.Ack_GetInfo;
+
+                // 找到第一个 { 前面的部分（固定开头）
+                int startIndex = ackTemplate.IndexOf('{');
+                string ackStart = ackTemplate.Substring(0, startIndex).Trim();
+
+                // 找到最后一个 } 后面的部分（固定结尾）
+                int endIndex = ackTemplate.LastIndexOf('}');
+                string ackEnd = ackTemplate.Substring(endIndex + 1).Trim();
+
+                if (recvStr.StartsWith(ackStart) && recvStr.EndsWith(ackEnd))
+                {
+                    serialComm.IsOnline = true;    //  联机成功，关闭超时判断
+                    // 停止自动发送
+                    _handshakeTimer.Stop();
+
+                    // 解析数据
+                    string data = InformationParsing.ExtractDeviceDataFromFrame(recvStr);
+                    DeviceInfo = InformationParsing.ParseDeviceInfo(data);
+
+                    // 显示到界面
+                    Invoke((MethodInvoker)delegate {
+                        ShowDeviceInfoToGrid();
+                        _logOutput.Append("设备信息解析完成", Color.LimeGreen);
+                    });
+                }
+            };
+        }
+        #endregion
+        /// <summary>
+        /// 将设备信息显示到 dataGridView1
+        /// </summary>
+        private void ShowDeviceInfoToGrid()
+        {
+            dataGridView1.Columns.Clear();
+            dataGridView1.Rows.Clear();
+
+            // 添加两列，并设置均分+居中
+            dataGridView1.Columns.Add("Key", "参数名称");
+            dataGridView1.Columns.Add("Value", "参数值");
+
+            // 两列按比例均分
+            dataGridView1.Columns[0].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+            dataGridView1.Columns[1].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+
+            // 设置文字居中（表头+单元格）
+            dataGridView1.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            dataGridView1.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+
+            // 隐藏列标题行
+            dataGridView1.ColumnHeadersVisible = false;
+            // 绑定数据
+            foreach (var item in DeviceInfo)
+            {
+                string chineseKey = GetChineseKeyName(item.Key);
+                dataGridView1.Rows.Add(chineseKey, item.Value);
+            }
+
+            // 去掉行号列
+            dataGridView1.RowHeadersVisible = false;
+        }
+
+        /// <summary>
+        /// 把英文键名翻译成中文
+        /// </summary>
+        private string GetChineseKeyName(string key)
+        {
+            switch (key)
+            {
+                case "ProductModel":
+                    return "产品型号";
+                case "BootloaderVer":
+                    return "Bootloader版本";
+                case "MainboardID":
+                    return "主板ID";
+                case "AppVersion":
+                    return "应用程序版本";
+                case "AppBurnTime":
+                    return "应用程序烧写时间";
+                case "ParamFileName":
+                    return "参数文件名";
+                case "ParamBurnTime":
+                    return "参数文件烧写时间";
+                default:
+                    return key; // 其他键名原样显示
+            }
+        }
     }
 }

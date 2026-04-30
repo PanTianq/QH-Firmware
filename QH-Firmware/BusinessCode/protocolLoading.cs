@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-
+// 加载协议文件、管理历史记录、解析协议内容到变量，提供事件通知界面更新
 namespace QH_Firmware
 {
     public class ProtocolLoading
