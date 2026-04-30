@@ -56,6 +56,7 @@ namespace QH_Firmware
             _isHandshakeSuccess = false;
             protocolInteraction();
         }
+        #region 窗体事件
         /// <summary>
         /// 窗体加载时初始化：串口、波特率、最近文件、协议自动加载
         /// </summary>
@@ -110,6 +111,7 @@ namespace QH_Firmware
             serialComm.Dispose();
             base.OnFormClosing(e);
         }
+        #endregion
 
         #region 串口列表&波特率
         /// <summary>
@@ -322,6 +324,7 @@ namespace QH_Firmware
             recentFilesToolStripMenuItem1.DropDownItems.Add(clear);
         }
         #endregion
+
         #region 设备区域
         private void textBox1_TextChanged(object sender, EventArgs e)
         {
@@ -410,6 +413,8 @@ namespace QH_Firmware
             };
         }
         #endregion
+
+        #region 设备信息显示
         /// <summary>
         /// 将设备信息显示到 dataGridView1
         /// </summary>
@@ -468,5 +473,6 @@ namespace QH_Firmware
                     return key; // 其他键名原样显示
             }
         }
+        #endregion
     }
 }
