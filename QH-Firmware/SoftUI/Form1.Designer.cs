@@ -58,6 +58,8 @@ namespace QH_Firmware
             this.fileNameLabel = new System.Windows.Forms.Label();
             this.burnButton = new System.Windows.Forms.Button();
             this.groupBox6 = new System.Windows.Forms.GroupBox();
+            this.tableLayoutPanel4 = new System.Windows.Forms.TableLayoutPanel();
+            this.resetbutton = new System.Windows.Forms.Button();
             this.advancedSettingButton = new System.Windows.Forms.Button();
             this.bottomPanel = new System.Windows.Forms.Panel();
             this.progressBar1 = new System.Windows.Forms.ProgressBar();
@@ -81,6 +83,7 @@ namespace QH_Firmware
             this.groupBox5.SuspendLayout();
             this.tableLayoutPanel3.SuspendLayout();
             this.groupBox6.SuspendLayout();
+            this.tableLayoutPanel4.SuspendLayout();
             this.bottomPanel.SuspendLayout();
             this.groupBox4.SuspendLayout();
             this.statusStrip1.SuspendLayout();
@@ -130,6 +133,7 @@ namespace QH_Firmware
             this.exitToolStripMenuItem.Name = "exitToolStripMenuItem";
             this.exitToolStripMenuItem.Size = new System.Drawing.Size(198, 36);
             this.exitToolStripMenuItem.Text = "退出软件";
+            this.exitToolStripMenuItem.Click += new System.EventHandler(this.exitToolStripMenuItem_Click);
             // 
             // aboutToolStripMenuItem
             // 
@@ -144,6 +148,7 @@ namespace QH_Firmware
             this.aboutSoftwareToolStripMenuItem.Name = "aboutSoftwareToolStripMenuItem";
             this.aboutSoftwareToolStripMenuItem.Size = new System.Drawing.Size(198, 36);
             this.aboutSoftwareToolStripMenuItem.Text = "关于软件";
+            this.aboutSoftwareToolStripMenuItem.Click += new System.EventHandler(this.aboutSoftwareToolStripMenuItem_Click);
             // 
             // mainTableLayout
             // 
@@ -415,7 +420,7 @@ namespace QH_Firmware
             this.dataGridView1.BorderStyle = System.Windows.Forms.BorderStyle.None;
             dataGridViewCellStyle1.Alignment = System.Windows.Forms.DataGridViewContentAlignment.MiddleLeft;
             dataGridViewCellStyle1.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(70)))), ((int)(((byte)(130)))), ((int)(((byte)(180)))));
-            dataGridViewCellStyle1.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.2F, System.Drawing.FontStyle.Regular); // 取消加粗
+            dataGridViewCellStyle1.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.2F, System.Drawing.FontStyle.Bold);
             dataGridViewCellStyle1.ForeColor = System.Drawing.Color.White;
             dataGridViewCellStyle1.SelectionBackColor = System.Drawing.SystemColors.Highlight;
             dataGridViewCellStyle1.SelectionForeColor = System.Drawing.SystemColors.HighlightText;
@@ -425,7 +430,7 @@ namespace QH_Firmware
             this.dataGridView1.ColumnHeadersHeightSizeMode = System.Windows.Forms.DataGridViewColumnHeadersHeightSizeMode.DisableResizing;
             dataGridViewCellStyle2.Alignment = System.Windows.Forms.DataGridViewContentAlignment.MiddleLeft;
             dataGridViewCellStyle2.BackColor = System.Drawing.SystemColors.Window;
-            dataGridViewCellStyle2.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.2F, System.Drawing.FontStyle.Regular); // 取消加粗
+            dataGridViewCellStyle2.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.2F, System.Drawing.FontStyle.Bold);
             dataGridViewCellStyle2.ForeColor = System.Drawing.SystemColors.ControlText;
             dataGridViewCellStyle2.SelectionBackColor = System.Drawing.Color.FromArgb(((int)(((byte)(220)))), ((int)(((byte)(240)))), ((int)(((byte)(255)))));
             dataGridViewCellStyle2.SelectionForeColor = System.Drawing.Color.Black;
@@ -434,7 +439,7 @@ namespace QH_Firmware
             this.dataGridView1.Dock = System.Windows.Forms.DockStyle.Fill;
             this.dataGridView1.EditMode = System.Windows.Forms.DataGridViewEditMode.EditProgrammatically;
             this.dataGridView1.EnableHeadersVisualStyles = false;
-            this.dataGridView1.GridColor = System.Drawing.Color.FromArgb(((int)(((byte)(180)))), ((int)(((byte)(180)))), ((int)(((byte)(180))))); // 表格线变深、变明显
+            this.dataGridView1.GridColor = System.Drawing.Color.FromArgb(((int)(((byte)(180)))), ((int)(((byte)(180)))), ((int)(((byte)(180)))));
             this.dataGridView1.Location = new System.Drawing.Point(10, 41);
             this.dataGridView1.Name = "dataGridView1";
             this.dataGridView1.ReadOnly = true;
@@ -546,7 +551,7 @@ namespace QH_Firmware
             // groupBox6
             // 
             this.groupBox6.BackColor = System.Drawing.Color.White;
-            this.groupBox6.Controls.Add(this.advancedSettingButton);
+            this.groupBox6.Controls.Add(this.tableLayoutPanel4);
             this.groupBox6.Dock = System.Windows.Forms.DockStyle.Fill;
             this.groupBox6.Font = new System.Drawing.Font("Microsoft YaHei UI", 10.2F, System.Drawing.FontStyle.Bold);
             this.groupBox6.Location = new System.Drawing.Point(3, 208);
@@ -558,20 +563,53 @@ namespace QH_Firmware
             this.groupBox6.TabStop = false;
             this.groupBox6.Text = "基本信息烧写";
             // 
+            // tableLayoutPanel4
+            // 
+            this.tableLayoutPanel4.ColumnCount = 1;
+            this.tableLayoutPanel4.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            this.tableLayoutPanel4.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            this.tableLayoutPanel4.Controls.Add(this.resetbutton, 0, 1);
+            this.tableLayoutPanel4.Controls.Add(this.advancedSettingButton, 0, 0);
+            this.tableLayoutPanel4.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.tableLayoutPanel4.Location = new System.Drawing.Point(15, 41);
+            this.tableLayoutPanel4.Name = "tableLayoutPanel4";
+            this.tableLayoutPanel4.RowCount = 2;
+            this.tableLayoutPanel4.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            this.tableLayoutPanel4.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 50F));
+            this.tableLayoutPanel4.Size = new System.Drawing.Size(141, 81);
+            this.tableLayoutPanel4.TabIndex = 1;
+            // 
+            // resetbutton
+            // 
+            this.resetbutton.AutoSize = true;
+            this.resetbutton.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(128)))), ((int)(((byte)(128)))), ((int)(((byte)(128)))));
+            this.resetbutton.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.resetbutton.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+            this.resetbutton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9.5F);
+            this.resetbutton.ForeColor = System.Drawing.Color.White;
+            this.resetbutton.Location = new System.Drawing.Point(3, 43);
+            this.resetbutton.Name = "resetbutton";
+            this.resetbutton.Size = new System.Drawing.Size(135, 35);
+            this.resetbutton.TabIndex = 1;
+            this.resetbutton.Text = "设备重启";
+            this.resetbutton.UseVisualStyleBackColor = false;
+            this.resetbutton.Click += new System.EventHandler(this.resetbutton_Click);
+            // 
             // advancedSettingButton
             // 
-            this.advancedSettingButton.Anchor = System.Windows.Forms.AnchorStyles.None;
             this.advancedSettingButton.AutoSize = true;
             this.advancedSettingButton.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(128)))), ((int)(((byte)(128)))), ((int)(((byte)(128)))));
+            this.advancedSettingButton.Dock = System.Windows.Forms.DockStyle.Fill;
             this.advancedSettingButton.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.advancedSettingButton.Font = new System.Drawing.Font("Microsoft YaHei UI", 9.5F);
             this.advancedSettingButton.ForeColor = System.Drawing.Color.White;
-            this.advancedSettingButton.Location = new System.Drawing.Point(15, 44);
+            this.advancedSettingButton.Location = new System.Drawing.Point(3, 3);
             this.advancedSettingButton.Name = "advancedSettingButton";
-            this.advancedSettingButton.Size = new System.Drawing.Size(140, 40);
+            this.advancedSettingButton.Size = new System.Drawing.Size(135, 34);
             this.advancedSettingButton.TabIndex = 0;
             this.advancedSettingButton.Text = "高级设置";
             this.advancedSettingButton.UseVisualStyleBackColor = false;
+            this.advancedSettingButton.Click += new System.EventHandler(this.advancedSettingButton_Click);
             // 
             // bottomPanel
             // 
@@ -683,7 +721,8 @@ namespace QH_Firmware
             this.tableLayoutPanel3.ResumeLayout(false);
             this.tableLayoutPanel3.PerformLayout();
             this.groupBox6.ResumeLayout(false);
-            this.groupBox6.PerformLayout();
+            this.tableLayoutPanel4.ResumeLayout(false);
+            this.tableLayoutPanel4.PerformLayout();
             this.bottomPanel.ResumeLayout(false);
             this.groupBox4.ResumeLayout(false);
             this.statusStrip1.ResumeLayout(false);
@@ -737,5 +776,7 @@ namespace QH_Firmware
         private System.Windows.Forms.StatusStrip statusStrip1;
         private System.Windows.Forms.ToolStripStatusLabel toolStripStatusLabel1;
         private System.Windows.Forms.ContextMenuStrip contextMenuStrip1;
+        private TableLayoutPanel tableLayoutPanel4;
+        private Button resetbutton;
     }
 }

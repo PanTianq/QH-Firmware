@@ -1,4 +1,5 @@
-﻿using System;
+﻿using QH_Firmware.SoftUI;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -10,6 +11,7 @@ namespace QH_Firmware
 {
     /// <summary>
     /// 主窗体：UI交互层，只处理界面显示和事件调用
+    /// 已适配《设备信息通信协议（键值对版）》
     /// </summary>
     public partial class Form1 : Form
     {
@@ -24,12 +26,14 @@ namespace QH_Firmware
         // 防止串口操作重复点击
         private bool _isPortOperating;
         // 工具版本号
-        private string version = "_V1.0";
+        public string version = "_V1.0";
         private AutoSendTimer _handshakeTimer;
         // 握手是否成功
         private bool _isHandshakeSuccess;
-        // 设备信息（键值对）
+        // 设备信息（键值对，适配新协议）
         public Dictionary<string, string> DeviceInfo { get; set; } = new Dictionary<string, string>();
+        // 只有这个为 true 时，才开始解析 #DEV_INFO: 帧
+        private bool _waitingForDeviceInfo;
         public Form1()
         {
             InitializeComponent();
@@ -45,7 +49,7 @@ namespace QH_Firmware
             serialComm.PortStateChanged += UpdatePortButtonState;
             // 协议加载日志 → 转发到日志组件
             protocolLoader.LogReceived += (msg, color) => _logOutput.Append(msg, color);
-            
+
 
             // 协议加载完成 → 更新状态栏并启用串口按钮
             protocolLoader.ProtocolLoaded += (fileName, desc) =>
@@ -191,6 +195,12 @@ namespace QH_Firmware
                     int baudRate = int.Parse(comboBox2.Text);
                     serialComm.Open(comboBox1.Text, baudRate);
                     toolStripStatusLabel1.Text = $"{comboBox1.Text}@{comboBox2.Text} 协议: {Path.GetFileName(protocolLoader.CurrentFilePath)}";
+
+                    // 打开串口时清空设备信息表格及日志
+                    dataGridView1.Rows.Clear();
+                    DeviceInfo.Clear();
+                    richTextBox1.Clear();
+
                     // 从UI控件获取值，传入定时器
                     string deviceModel = textBox1.Text.Trim();
                     string firmwareRegion = comboBox3.SelectedIndex.ToString(); // 直接用索引作为数字
@@ -201,6 +211,7 @@ namespace QH_Firmware
                     // 打开串口
                     serialComm.Close();
                     _handshakeTimer.Stop();
+                    _waitingForDeviceInfo = false; // 重置设备解析状态
                     toolStripStatusLabel1.Text = "就绪";
                 }
             }
@@ -364,57 +375,54 @@ namespace QH_Firmware
         #endregion
 
         #region 协议交互流程
-        //协议交互流程：握手 → 获取设备信息 → 显示到界面
         private void protocolInteraction()
         {
-            // 初始化自动发送
             _handshakeTimer = new AutoSendTimer(serialComm, protocolLoader, _logOutput);
-            // 接收数据 → 验证握手
+
             serialComm.DataReceived += (buffer) =>
             {
-                string recvStr = Encoding.UTF8.GetString(buffer).Trim();
+                string recvStr = Encoding.ASCII.GetString(buffer).Trim();
 
-                // --------------------- 握手 ---------------------
-                if (_handshakeTimer.CheckHandshakeAck(recvStr))
+                // ===================== 握手校验（同步设置标志）=====================
+                bool isHandshakeOk = _handshakeTimer.CheckHandshakeAck(recvStr);
+                if (isHandshakeOk)
                 {
+                    // 先同步打开解析开关（必须在Invoke外面）
+                    _waitingForDeviceInfo = true;
                     Invoke((MethodInvoker)delegate {
                         _handshakeTimer.SwitchToGetInfoMode();
                     });
                 }
 
-                // --------------------- 设备信息解析 ---------------------
-                // 从协议模板中提取固定的前后缀
-                string ackTemplate = protocolLoader.Ack_GetInfo;
+                // ===================== 未握手成功 → 禁止解析 =====================
+                if (!_waitingForDeviceInfo)
+                    return;
 
-                // 找到第一个 { 前面的部分（固定开头）
-                int startIndex = ackTemplate.IndexOf('{');
-                string ackStart = ackTemplate.Substring(0, startIndex).Trim();
+                // ===================== 握手成功 → 才允许解析 =====================
+                var deviceDict = InformationParsing.ParseDeviceFrame(recvStr, out string logMsg);
 
-                // 找到最后一个 } 后面的部分（固定结尾）
-                int endIndex = ackTemplate.LastIndexOf('}');
-                string ackEnd = ackTemplate.Substring(endIndex + 1).Trim();
+                // 解析日志（不打印“未找到帧头”避免刷屏）
+                if (!string.IsNullOrEmpty(logMsg) && !logMsg.Contains("未找到帧头"))
+                    _logOutput.Append(logMsg, Color.Orange);
 
-                if (recvStr.StartsWith(ackStart) && recvStr.EndsWith(ackEnd))
-                {
-                    serialComm.IsOnline = true;    //  联机成功，关闭超时判断
-                    // 停止自动发送
-                    _handshakeTimer.Stop();
+                if (deviceDict == null)
+                    return;
 
-                    // 解析数据
-                    string data = InformationParsing.ExtractDeviceDataFromFrame(recvStr);
-                    DeviceInfo = InformationParsing.ParseDeviceInfo(data);
+                // 解析成功
+                DeviceInfo = deviceDict;
+                serialComm.IsOnline = true;
+                _handshakeTimer.Stop();
+                _waitingForDeviceInfo = false; // 解析完关闭，防止重复解析
 
-                    // 显示到界面
-                    Invoke((MethodInvoker)delegate {
-                        ShowDeviceInfoToGrid();
-                        _logOutput.Append("设备信息解析完成", Color.LimeGreen);
-                    });
-                }
+                Invoke((MethodInvoker)delegate {
+                    ShowDeviceInfoToGrid();
+                    _logOutput.Append("设备信息解析完成", Color.LimeGreen);
+                });
             };
         }
         #endregion
 
-        #region 设备信息显示
+        #region 设备信息显示（适配新协议键名）
         /// <summary>
         /// 将设备信息显示到 dataGridView1
         /// </summary>
@@ -422,57 +430,73 @@ namespace QH_Firmware
         {
             dataGridView1.Columns.Clear();
             dataGridView1.Rows.Clear();
-
-            // 添加两列，并设置均分+居中
-            dataGridView1.Columns.Add("Key", "参数名称");
-            dataGridView1.Columns.Add("Value", "参数值");
-
-            // 两列按比例均分
+            dataGridView1.Columns.Add("Key", "名称");
+            dataGridView1.Columns.Add("Value", "值");
             dataGridView1.Columns[0].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
             dataGridView1.Columns[1].AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
-
-            // 设置文字居中（表头+单元格）
             dataGridView1.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
             dataGridView1.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
-
-            // 隐藏列标题行
             dataGridView1.ColumnHeadersVisible = false;
-            // 绑定数据
-            foreach (var item in DeviceInfo)
-            {
-                string chineseKey = GetChineseKeyName(item.Key);
-                dataGridView1.Rows.Add(chineseKey, item.Value);
-            }
-
-            // 去掉行号列
             dataGridView1.RowHeadersVisible = false;
-        }
 
-        /// <summary>
-        /// 把英文键名翻译成中文
-        /// </summary>
-        private string GetChineseKeyName(string key)
-        {
-            switch (key)
+            var sorted = new List<string> { "PM", "PN", "CM", "CN", "BV", "ID", "AV", "ABT", "PFN", "PBT" };
+            foreach (var k in sorted)
             {
-                case "ProductModel":
-                    return "产品型号";
-                case "BootloaderVer":
-                    return "Bootloader版本";
-                case "MainboardID":
-                    return "主板ID";
-                case "AppVersion":
-                    return "应用程序版本";
-                case "AppBurnTime":
-                    return "应用程序烧写时间";
-                case "ParamFileName":
-                    return "参数文件名";
-                case "ParamBurnTime":
-                    return "参数文件烧写时间";
-                default:
-                    return key; // 其他键名原样显示
+                string name = InformationParsing.GetChineseName(k);
+                string val = DeviceInfo.ContainsKey(k) ? DeviceInfo[k] : "N/A";
+                dataGridView1.Rows.Add(name, val);
             }
         }
+        #endregion
+
+        #region 打开高级设置窗口
+        private void advancedSettingButton_Click(object sender, EventArgs e)
+        {
+            //先打开输入密码界面
+            QH_Firmware.Other_UI.password frm = new QH_Firmware.Other_UI.password();
+            frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
+            frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
+        }
+        #endregion
+
+        #region 打开设备重启窗口
+        private void resetbutton_Click(object sender, EventArgs e)
+        {
+            // 打开设备重启窗口
+            QH_Firmware.Other_UI.Reset frm = new QH_Firmware.Other_UI.Reset();
+            frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
+            frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
+        }
+        #endregion
+
+        #region 退出软件
+        private void exitToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            // 弹出确认框
+            DialogResult result = MessageBox.Show(
+                "确定要退出软件吗？",
+                "退出确认",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (result == DialogResult.Yes)
+            {
+                // 用户选择“是”，执行退出
+                Application.Exit();
+            }
+            // 选择“否”则什么都不做，程序继续运行
+        }
+        #endregion
+
+        #region 关于
+        private void aboutSoftwareToolStripMenuItem_Click(object sender, EventArgs e)
+        {
+            QH_Firmware.SoftUI.About frm = new QH_Firmware.SoftUI.About();
+            frm.AppVersion = this.version;
+            frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
+            frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
+        }
+
         #endregion
     }
 }

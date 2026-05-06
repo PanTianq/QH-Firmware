@@ -62,7 +62,7 @@ namespace QH_Firmware
             // 标记握手成功
             _isHandshakeSuccess = true;
 
-            //_logOutput.Append("[系统] 握手成功 → 切换获取设备信息", Color.LimeGreen);
+            _logOutput.Append("握手成功", Color.LimeGreen);
 
             // 2. 使用协议中的 Interval_GetInfo 启动定时发送
             int interval = _protocolLoader.Interval_GetInfo > 0 ? _protocolLoader.Interval_GetInfo : 1000;
@@ -136,7 +136,7 @@ namespace QH_Firmware
 
                 if (isMatch)
                 {
-                    _logOutput.Append("[握手] 验证成功 → 准备获取设备信息", Color.LimeGreen);
+                    //_logOutput.Append("[握手] 验证成功 → 准备获取设备信息", Color.LimeGreen);
                 }
 
                 return isMatch;
