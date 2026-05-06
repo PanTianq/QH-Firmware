@@ -1,3 +1,0 @@
-update link QH4011 1 ok
-
-update inform 0 {ProductModel=QH4011&BootloaderVer=V1.0.3&MainboardID=AABBCCDDEEFF&AppVersion=V2.1.5&AppBurnTime=2026-04-29 15:30:20&ParamFileName=para_qh4011.bin&ParamBurnTime=2026-04-29 15:30:30} ok
