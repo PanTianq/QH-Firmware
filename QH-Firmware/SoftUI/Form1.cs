@@ -572,7 +572,7 @@ namespace QH_Firmware
 
         #endregion
 
-        #region  加载固件
+        #region  加载固件、开始固化
         private void loadFileButton_Click(object sender, EventArgs e)
         {
             progressBar1.Value = 0;
@@ -592,7 +592,7 @@ namespace QH_Firmware
                 }
             }
         }
-        #endregion
+        
 
         private void burnButton_Click(object sender, EventArgs e)
         {
@@ -611,5 +611,6 @@ namespace QH_Firmware
             _logOutput.Append("开始升级固件...", System.Drawing.Color.LimeGreen);
             _floading.StartUpgrade();
         }
+        #endregion
     }
 }
