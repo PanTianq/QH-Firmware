@@ -2,6 +2,7 @@
 using QH_Firmware.SoftUI;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -74,6 +75,20 @@ namespace QH_Firmware
 
             // 初始化固件加载类
             _floading = new Floading(serialComm, protocolLoader, _logOutput);
+
+            // 绑定进度条到 progressBar1
+            _floading.OnProgressChanged += progress =>
+            {
+                if (progressBar1.InvokeRequired)
+                {
+                    progressBar1.Invoke(new Action(() => progressBar1.Value = progress));
+                }
+                else
+                {
+                    progressBar1.Value = progress;
+                }
+            };
+
         }
         #region 窗体事件
         /// <summary>
@@ -90,6 +105,8 @@ namespace QH_Firmware
 
             // 初始化最近协议文件菜单
             InitializeRecentFilesMenu();
+            // 初始化进度条
+            progressBar1.Value = 0;
             // 协议是否加载成功标记
             bool protocolLoaded = false;
             // 加载最近使用过的协议文件记录
@@ -227,6 +244,7 @@ namespace QH_Firmware
                     serialComm.Close();
                     _handshakeTimer.Stop();
                     _waitingForDeviceInfo = false; // 重置设备解析状态
+                    progressBar1.Value = 0;
                     toolStripStatusLabel1.Text = "就绪";
                 }
             }
@@ -396,6 +414,8 @@ namespace QH_Firmware
 
             serialComm.DataReceived += (buffer) =>
             {
+                // 加这一句 → 交给烧录逻辑处理
+                _floading.HandleUpgradeResponse(buffer);
                 string recvStr = Encoding.ASCII.GetString(buffer).Trim();
 
                 // ===================== 握手校验（同步设置标志）=====================
@@ -516,10 +536,9 @@ namespace QH_Firmware
         #region 打开设备重启窗口
         private void resetbutton_Click(object sender, EventArgs e)
         {
-            // 打开设备重启窗口
-            QH_Firmware.Other_UI.Reset frm = new QH_Firmware.Other_UI.Reset();
-            frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
-            frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
+            Reset frm = new Reset(serialComm, _logOutput, protocolLoader);
+            frm.StartPosition = FormStartPosition.CenterParent;
+            frm.ShowDialog();
         }
         #endregion
 
@@ -556,6 +575,7 @@ namespace QH_Firmware
         #region  加载固件
         private void loadFileButton_Click(object sender, EventArgs e)
         {
+            progressBar1.Value = 0;
             using (OpenFileDialog ofd = new OpenFileDialog())
             {
                 ofd.Filter = "固件文件 (*.bin;*.hex)|*.bin;*.hex";
@@ -564,18 +584,32 @@ namespace QH_Firmware
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
                     string filePath = ofd.FileName;
-                    string area = comboBox3.Text.Trim();       // 区域
-                    string deviceModel = textBox1.Text.Trim(); // 设备型号
+                    string area = comboBox3.Text.Trim();
+                    string deviceModel = textBox1.Text.Trim();
 
-                    bool ok = _floading.LoadAndStartUpgrade(filePath, area, deviceModel, _isHandshakeSuccess);
-
-                    if (ok)
-                    {
-                        fileNameLabel.Text = $"文件名：{_floading.FileName}";
-                    }
+                    _floading.LoadFirmware(filePath, area, deviceModel);
+                    fileNameLabel.Text = $"文件名：{_floading.FileName}";
                 }
             }
         }
         #endregion
+
+        private void burnButton_Click(object sender, EventArgs e)
+        {
+            if (_floading.FirmwareData == null)
+            {
+                MessageBox.Show("请先加载固件！");
+                return;
+            }
+
+            if (!serialComm.IsOpen)
+            {
+                MessageBox.Show("请先打开串口！");
+                return;
+            }
+
+            _logOutput.Append("开始升级固件...", System.Drawing.Color.LimeGreen);
+            _floading.StartUpgrade();
+        }
     }
 }

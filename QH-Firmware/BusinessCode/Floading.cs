@@ -1,77 +1,47 @@
 ﻿using System;
+using System.Drawing;
 using System.IO;
-//固件加载和升级核心类：负责读取固件文件、计算校验、分包、发送升级命令、监听设备回复等
+using System.Text;
+
 namespace QH_Firmware
 {
     public class Floading
     {
         private const int PACKET_SIZE = 1024;
-
         public byte[] FirmwareData { get; private set; }
         public string FileName { get; private set; }
         public int FileSize => FirmwareData?.Length ?? 0;
-        public int TotalPackets => FirmwareData == null ? 0 : (FirmwareData.Length + PACKET_SIZE - 1) / PACKET_SIZE;
+        public int TotalPackets
+        {
+            get
+            {
+                if (FirmwareData == null || FirmwareData.Length == 0) return 0;
+                return (FirmwareData.Length + PACKET_SIZE - 1) / PACKET_SIZE;
+            }
+        }
         public uint Checksum { get; private set; }
 
         private readonly SerialCommunication _serialComm;
         private readonly ProtocolLoading _protocolLoader;
         private readonly LogOutput _logOutput;
+        private int _currentPacketIndex;
 
-        // 监听标志，防止重复注册事件
-        private bool _isListeningResponse = false;
+        public event Action<int> OnProgressChanged;
+
+        // 状态标记：是否收到设备【准备就绪应答】
+        private bool _deviceReadyResponded;
 
         public Floading(SerialCommunication serialComm, ProtocolLoading protocolLoader, LogOutput logOutput)
         {
             _serialComm = serialComm;
             _protocolLoader = protocolLoader;
             _logOutput = logOutput;
+            _deviceReadyResponded = false;
         }
 
-        public bool LoadAndStartUpgrade(string filePath, string area, string deviceModel, bool isHandshakeSuccess)
-        {
-            try
-            {
-                bool loadSuccess = LoadFirmware(filePath, area, deviceModel);
-                if (!loadSuccess)
-                {
-                    _logOutput.Append("固件加载失败：文件格式或文件名不匹配", System.Drawing.Color.Orange);
-                    return false;
-                }
-
-                if (!isHandshakeSuccess)
-                {
-                    _logOutput.Append("请先完成设备握手，再升级固件", System.Drawing.Color.Orange);
-                    return false;
-                }
-
-                if (!_serialComm.IsOpen)
-                {
-                    _logOutput.Append("请先打开串口", System.Drawing.Color.Orange);
-                    return false;
-                }
-
-                string prefix = _protocolLoader.Cmd_FirmwareHeader.Split('{')[0].Trim();
-                string sendCmd = $"{prefix} {TotalPackets} 0x{Checksum:X8}";
-                _serialComm.SendString(sendCmd);
-
-                _logOutput.Append($"固件加载成功,大小：{FileSize} 字节 | 总包：{TotalPackets} | 校验：0x{Checksum:X8}", System.Drawing.Color.LimeGreen);
-
-                // 监听硬件回复（只注册一次）
-                if (!_isListeningResponse)
-                {
-                    _serialComm.DataReceived += ListenWriteResponse;
-                    _isListeningResponse = true;
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                _logOutput.Append($"固件加载异常：{ex.Message}", System.Drawing.Color.Orange);
-                return false;
-            }
-        }
-
+        // ======================
+        /// 加载固件（会自动发送【设备准备就绪】）
+        // ======================
         public bool LoadFirmware(string filePath, string area, string deviceModel)
         {
             try
@@ -79,7 +49,7 @@ namespace QH_Firmware
                 string ext = Path.GetExtension(filePath).ToLower();
                 if (ext != ".bin" && ext != ".hex")
                 {
-                    _logOutput.Append("不支持此文件类型，仅支持 .bin / .hex", System.Drawing.Color.Orange);
+                    _logOutput.Append("仅支持 .bin / .hex 文件", Color.Orange);
                     return false;
                 }
 
@@ -89,7 +59,7 @@ namespace QH_Firmware
                     string model = deviceModel.Trim();
                     if (!fileName.Contains(model))
                     {
-                        _logOutput.Append($"文件校验失败：R1 区域固件必须包含型号「{model}」", System.Drawing.Color.Orange);
+                        _logOutput.Append($"R1 固件必须包含型号：{model}", Color.Orange);
                         return false;
                     }
                 }
@@ -97,50 +67,127 @@ namespace QH_Firmware
                 FirmwareData = File.ReadAllBytes(filePath);
                 FileName = fileName;
                 Checksum = CalculateChecksum(FirmwareData);
+                _deviceReadyResponded = false;
+
+                _logOutput.Append($"固件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}", Color.LimeGreen);
+
+                // ======================
+                // 自动发送【设备准备就绪】
+                // ======================
+                SendDeviceReadyCommand();
 
                 return true;
             }
-            catch (Exception ex)
+            catch
             {
-                _logOutput.Append($"读取文件失败：{ex.Message}", System.Drawing.Color.Orange);
+                _logOutput.Append("固件加载失败", Color.Orange);
                 return false;
             }
         }
 
-        /// <summary>
-        /// 监听硬件写入回复：update load {总包号} {0} ok
-        /// update load 22 0 ok
-        /// </summary>
-        private void ListenWriteResponse(byte[] buffer)
+        // ======================
+        // 发送：设备准备就绪（升级开始帧）
+        // ======================
+        public void SendDeviceReadyCommand()
         {
-            string recv = System.Text.Encoding.ASCII.GetString(buffer).Trim();
-            string prefix = _protocolLoader.Ack_FirmwareHeader.Split('{')[0].Trim();
-            string ack = $"{prefix} {TotalPackets} 0 ok";
-
-            if (recv.Contains(ack))
+            try
             {
-                // 收到正确回应，移除监听
-                _serialComm.DataReceived -= ListenWriteResponse;
-                _isListeningResponse = false;
-
-                _logOutput.Append("设备已就绪", System.Drawing.Color.LimeGreen);
+                string prefix = _protocolLoader.Cmd_FirmwareHeader.Split('{')[0].Trim();
+                string sendCmd = $"{prefix} {TotalPackets} 0x{Checksum:X8}";
+                _serialComm.SendString(sendCmd);
             }
-            else
+            catch
             {
-                _logOutput.Append("设备未就绪，请重新加载一遍文件", System.Drawing.Color.Orange);
+                _logOutput.Append("设备未就绪", Color.Orange);
             }
         }
 
-        public byte[] GetPacket(int index)
+        // ======================
+        // 开始烧录
+        // ======================
+        public void StartUpgrade()
         {
-            if (FirmwareData == null || index < 0 || index >= TotalPackets)
-                return null;
+            if (FirmwareData == null)
+            {
+                _logOutput.Append("请先加载固件", Color.Orange);
+                return;
+            }
+            if (!_deviceReadyResponded)
+            {
+                _logOutput.Append("等待设备准备就绪...", System.Drawing.Color.Orange);
+                return;
+            }
+            _currentPacketIndex = 0;
+            OnProgressChanged?.Invoke(0);
+            SendNextPacket();
+        }
 
-            int start = index * PACKET_SIZE;
-            int len = Math.Min(PACKET_SIZE, FirmwareData.Length - start);
-            byte[] packet = new byte[len];
-            Array.Copy(FirmwareData, start, packet, 0, len);
-            return packet;
+        // ======================
+        // 发送下一包
+        // ======================
+        private void SendNextPacket()
+        {
+            if (_currentPacketIndex >= TotalPackets)
+            {
+                _logOutput.Append("固件上传全部完成！", Color.LimeGreen);
+                OnProgressChanged?.Invoke(100);
+                return;
+            }
+
+            int start = _currentPacketIndex * PACKET_SIZE;
+            int dataLen = Math.Min(PACKET_SIZE, FirmwareData.Length - start);
+            byte[] firmwarePacket = new byte[dataLen];
+            Array.Copy(FirmwareData, start, firmwarePacket, 0, dataLen);
+
+            string loadhead = _protocolLoader.Cmd_FirmwareHeader.Split('{')[0].Trim();
+            string header = $"{loadhead} {TotalPackets} {_currentPacketIndex + 1} {dataLen} ";
+            byte[] headerBytes = Encoding.ASCII.GetBytes(header);
+
+            byte[] sendData = new byte[headerBytes.Length + firmwarePacket.Length];
+            Array.Copy(headerBytes, sendData, headerBytes.Length);
+            Array.Copy(firmwarePacket, 0, sendData, headerBytes.Length, firmwarePacket.Length);
+
+            _serialComm.Send(sendData);
+
+            int progress = (int)((_currentPacketIndex + 1) * 100.0 / TotalPackets);
+            OnProgressChanged?.Invoke(progress);
+        }
+
+        // ======================
+        // 处理升级应答
+        // ======================
+        public void HandleUpgradeResponse(byte[] buffer)
+        {
+            string recv = Encoding.ASCII.GetString(buffer).Trim();
+            string clean = recv.Replace(" ", "");
+            if (!_deviceReadyResponded)
+            {
+                string ackReady = _protocolLoader.Ack_FirmwareHeader.Split('{')[0].Trim().Replace(" ", "");
+                string expectReady = $"{ackReady}{TotalPackets}0";
+
+                if (clean.Contains(expectReady))
+                {
+                    _deviceReadyResponded = true;
+                    _logOutput.Append("设备准备就绪，等待上传...", System.Drawing.Color.LimeGreen);
+                    return;
+                }
+            }
+            if (_deviceReadyResponded)
+            {
+                int pkgNo = _currentPacketIndex + 1;
+                int pkgLen = (_currentPacketIndex == TotalPackets - 1)
+                    ? FirmwareData.Length - _currentPacketIndex * PACKET_SIZE
+                    : PACKET_SIZE;
+
+                string ack = _protocolLoader.Ack_FirmwareHeader.Split('{')[0].Trim().Replace(" ", ""); ;
+                string expected = $"{ack}{TotalPackets}{pkgNo}ok";
+
+                if (clean.Contains(expected))
+                {
+                    _currentPacketIndex++;
+                    SendNextPacket();
+                }
+            }
         }
 
         private uint CalculateChecksum(byte[] data)
@@ -155,13 +202,8 @@ namespace QH_Firmware
             FirmwareData = null;
             FileName = string.Empty;
             Checksum = 0;
-
-            // 防止残留监听
-            if (_isListeningResponse)
-            {
-                _serialComm.DataReceived -= ListenWriteResponse;
-                _isListeningResponse = false;
-            }
+            _currentPacketIndex = 0;
+            _deviceReadyResponded = false;
         }
     }
 }

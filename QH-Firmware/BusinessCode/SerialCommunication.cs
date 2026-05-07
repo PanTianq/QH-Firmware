@@ -201,8 +201,8 @@ namespace QH_Firmware
 
                     if (read > 0)
                     {
-                        string recvText = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
-                        LogReceived?.Invoke($"[接收] {recvText}", Color.White);
+                        //string recvText = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
+                        //LogReceived?.Invoke($"[接收] {recvText}", Color.White);
                         DataReceived?.Invoke(buffer);
                     }
                 }
