@@ -40,43 +40,69 @@ namespace QH_Firmware
         public Dictionary<string, string> DeviceInfo { get; set; } = new Dictionary<string, string>();
         // 只有这个为 true 时，才开始解析 #DEV_INFO: 帧
         private bool _waitingForDeviceInfo;
-        
+
+        #region 主窗体构造
+        /// <summary>
+        /// 主窗体构造函数
+        /// 功能说明：
+        /// 1. 初始化窗体及所有界面控件、组件
+        /// 2. 设置默认控件状态（未握手时禁用操作按钮）
+        /// 3. 绑定串口、协议、日志、固件升级相关事件
+        /// 4. 初始化协议交互、设备信息解析、右键菜单等核心功能
+        /// 5. 建立界面与底层业务逻辑的关联（日志、串口、协议、升级）
+        /// </summary>
         public Form1()
         {
             InitializeComponent();
-            // 固定窗口标题 + 版本号
+            // 设置窗口标题（工具名称+版本号）
             this.Text = "QH Firmware 固件烧录工具" + version;
-            // 初始化日志组件，绑定日志显示控件
+            // ===================== 初始控件状态 =====================
+            // 设备信息未解析成功时，默认禁用固件操作、系统设置相关按钮
+            loadFileButton.Enabled = false;
+            burnButton.Enabled = false;
+            advancedSettingButton.Enabled = false;
+            resetbutton.Enabled = false;
+
+            // ===================== 组件初始化 =====================
+            // 初始化日志输出组件，绑定日志显示控件
             _logOutput = new LogOutput(richTextBox1);
-            // 窗体加载事件绑定
+
+            // 绑定窗体加载事件
             Load += Form1_Load;
-            // 串口日志输出 → 转发到日志组件
+
+            // ===================== 事件绑定 =====================
+            // 串口日志 → 转发到界面日志组件
             serialComm.LogReceived += (msg, color) => _logOutput.Append(msg, color);
-            // 串口状态变化 → 更新按钮状态
+            // 串口状态变更 → 更新界面按钮状态
             serialComm.PortStateChanged += UpdatePortButtonState;
-            // 协议加载日志 → 转发到日志组件
+            // 协议加载日志 → 转发到界面日志组件
             protocolLoader.LogReceived += (msg, color) => _logOutput.Append(msg, color);
 
-
-            // 协议加载完成 → 更新状态栏并启用串口按钮
+            // ===================== 协议加载完成回调 =====================
+            // 协议加载成功后：更新状态栏提示 + 启用打开串口按钮
             protocolLoader.ProtocolLoaded += (fileName, desc) =>
             {
                 toolStripStatusLabel1.Text = $"协议：{fileName}";
                 openPortButton.Enabled = true;
             };
+
+            // ===================== 通信流程初始化 =====================
+            // 初始握手状态：未成功
             _isHandshakeSuccess = false;
+            // 初始化协议交互（握手、数据解析）
             protocolInteraction();
-            //  初始化表格右键菜单
+
+            // 初始化设备信息表格右键菜单
             InformationParsing.InitGridContextMenu(
-            dataGridView1,
-            () => serialComm.IsOpen,
-            RefreshDeviceInfo
+                dataGridView1,
+                () => serialComm.IsOpen,
+                RefreshDeviceInfo
             );
 
-            // 初始化固件加载类
+            // 初始化固件升级操作类
             _floading = new Floading(serialComm, protocolLoader, _logOutput);
 
-            // 绑定进度条到 progressBar1
+            // 绑定固件升级进度条事件
             _floading.OnProgressChanged += progress =>
             {
                 if (progressBar1.InvokeRequired)
@@ -88,8 +114,9 @@ namespace QH_Firmware
                     progressBar1.Value = progress;
                 }
             };
-
         }
+        #endregion 
+
         #region 窗体事件
         /// <summary>
         /// 窗体加载时初始化：串口、波特率、最近文件、协议自动加载
@@ -246,6 +273,15 @@ namespace QH_Firmware
                     _waitingForDeviceInfo = false; // 重置设备解析状态
                     progressBar1.Value = 0;
                     toolStripStatusLabel1.Text = "就绪";
+
+                    fileNameLabel.Text = "文件名：";
+
+                    // 关闭串口，重置按钮状态
+                    _isHandshakeSuccess = false;
+                    loadFileButton.Enabled = false;
+                    burnButton.Enabled = false;
+                    advancedSettingButton.Enabled = false;
+                    resetbutton.Enabled = false;
                 }
             }
             finally
@@ -274,6 +310,9 @@ namespace QH_Firmware
             comboBox1.Enabled = !isOpen;
             comboBox2.Enabled = !isOpen;
             refreshButton.Enabled = !isOpen;
+            // 控制设备区域控件：串口打开后禁用
+            textBox1.Enabled = !isOpen;
+            comboBox3.Enabled = !isOpen;
         }
         #endregion
 
@@ -453,6 +492,11 @@ namespace QH_Firmware
                 Invoke((MethodInvoker)delegate {
                     ShowDeviceInfoToGrid();
                     _logOutput.Append("设备信息解析完成", Color.LimeGreen);
+                    // 设备解析成功，启用所有按钮
+                    loadFileButton.Enabled = true;
+                    burnButton.Enabled = true;
+                    advancedSettingButton.Enabled = true;
+                    resetbutton.Enabled = true;
                 });
             };
         }
@@ -608,9 +652,10 @@ namespace QH_Firmware
                 return;
             }
 
-            _logOutput.Append("开始升级固件...", System.Drawing.Color.LimeGreen);
+            //_logOutput.Append("开始升级固件...", System.Drawing.Color.LimeGreen);
             _floading.StartUpgrade();
         }
         #endregion
+
     }
 }

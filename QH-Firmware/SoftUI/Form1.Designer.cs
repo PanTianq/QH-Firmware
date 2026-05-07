@@ -68,6 +68,7 @@ namespace QH_Firmware
             this.richTextBox1 = new System.Windows.Forms.RichTextBox();
             this.statusStrip1 = new System.Windows.Forms.StatusStrip();
             this.toolStripStatusLabel1 = new System.Windows.Forms.ToolStripStatusLabel();
+            this.toolStripComboBox_LogToggle = new System.Windows.Forms.ToolStripComboBox();
             this.contextMenuStrip1 = new System.Windows.Forms.ContextMenuStrip(this.components);
             this.menuStrip1.SuspendLayout();
             this.mainTableLayout.SuspendLayout();
@@ -685,6 +686,12 @@ namespace QH_Firmware
             this.toolStripStatusLabel1.Size = new System.Drawing.Size(46, 24);
             this.toolStripStatusLabel1.Text = "就绪";
             // 
+            // toolStripComboBox_LogToggle
+            // 
+            this.toolStripComboBox_LogToggle.Margin = new System.Windows.Forms.Padding(1, 0, 1, 0);
+            this.toolStripComboBox_LogToggle.Name = "toolStripComboBox_LogToggle";
+            this.toolStripComboBox_LogToggle.Size = new System.Drawing.Size(121, 26);
+            // 
             // contextMenuStrip1
             // 
             this.contextMenuStrip1.ImageScalingSize = new System.Drawing.Size(20, 20);
@@ -779,6 +786,7 @@ namespace QH_Firmware
         private System.Windows.Forms.Button advancedSettingButton;
         private System.Windows.Forms.StatusStrip statusStrip1;
         private System.Windows.Forms.ToolStripStatusLabel toolStripStatusLabel1;
+        private System.Windows.Forms.ToolStripComboBox toolStripComboBox_LogToggle;
         private System.Windows.Forms.ContextMenuStrip contextMenuStrip1;
         private TableLayoutPanel tableLayoutPanel4;
         private Button resetbutton;
