@@ -51,10 +51,6 @@ namespace QH_Firmware.Other_UI
                 // 密码正确，打开高级设置窗口
                 this.DialogResult = DialogResult.OK;
                 this.Close();
-                //先打开输入密码界面
-                QH_Firmware.Other_UI.Advanced frm = new QH_Firmware.Other_UI.Advanced();
-                frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
-                frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
             }
             else
             {

@@ -1,4 +1,5 @@
-﻿using QH_Firmware.SoftUI;
+﻿using QH_Firmware.Other_UI;
+using QH_Firmware.SoftUI;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -16,11 +17,15 @@ namespace QH_Firmware
     public partial class Form1 : Form
     {
         // 串口通信操作类（已独立封装）
-        private readonly SerialCommunication serialComm = new SerialCommunication();
+        public readonly SerialCommunication serialComm = new SerialCommunication();
         // 协议加载与解析类（已独立封装）
-        private readonly ProtocolLoading protocolLoader = new ProtocolLoading();
+        public readonly ProtocolLoading protocolLoader = new ProtocolLoading();
         // 日志输出类（已独立封装）
-        private readonly LogOutput _logOutput;
+        public readonly LogOutput _logOutput;
+        // 协议（已独立封装）
+        public readonly ProtocolLoading _protocolLoader;
+        // 加载固件（已独立封装）
+        private Floading _floading;
         // 系统默认支持的波特率列表
         private static readonly int[] DefaultBaudRates = { 9600, 115200 };
         // 防止串口操作重复点击
@@ -29,11 +34,12 @@ namespace QH_Firmware
         public string version = "_V1.0";
         private AutoSendTimer _handshakeTimer;
         // 握手是否成功
-        private bool _isHandshakeSuccess;
+        public bool _isHandshakeSuccess;
         // 设备信息（键值对，适配新协议）
         public Dictionary<string, string> DeviceInfo { get; set; } = new Dictionary<string, string>();
         // 只有这个为 true 时，才开始解析 #DEV_INFO: 帧
         private bool _waitingForDeviceInfo;
+        
         public Form1()
         {
             InitializeComponent();
@@ -59,6 +65,15 @@ namespace QH_Firmware
             };
             _isHandshakeSuccess = false;
             protocolInteraction();
+            //  初始化表格右键菜单
+            InformationParsing.InitGridContextMenu(
+            dataGridView1,
+            () => serialComm.IsOpen,
+            RefreshDeviceInfo
+            );
+
+            // 初始化固件加载类
+            _floading = new Floading(serialComm, protocolLoader, _logOutput);
         }
         #region 窗体事件
         /// <summary>
@@ -387,6 +402,8 @@ namespace QH_Firmware
                 bool isHandshakeOk = _handshakeTimer.CheckHandshakeAck(recvStr);
                 if (isHandshakeOk)
                 {
+                    // 标记握手成功
+                    _isHandshakeSuccess = true;
                     // 先同步打开解析开关（必须在Invoke外面）
                     _waitingForDeviceInfo = true;
                     Invoke((MethodInvoker)delegate {
@@ -397,7 +414,6 @@ namespace QH_Firmware
                 // ===================== 未握手成功 → 禁止解析 =====================
                 if (!_waitingForDeviceInfo)
                     return;
-
                 // ===================== 握手成功 → 才允许解析 =====================
                 var deviceDict = InformationParsing.ParseDeviceFrame(recvStr, out string logMsg);
 
@@ -412,7 +428,7 @@ namespace QH_Firmware
                 DeviceInfo = deviceDict;
                 serialComm.IsOnline = true;
                 _handshakeTimer.Stop();
-                _waitingForDeviceInfo = false; // 解析完关闭，防止重复解析
+                _waitingForDeviceInfo = false; // 解析完关闭，防止重复解析                        
 
                 Invoke((MethodInvoker)delegate {
                     ShowDeviceInfoToGrid();
@@ -447,15 +463,53 @@ namespace QH_Firmware
                 dataGridView1.Rows.Add(name, val);
             }
         }
+        /// <summary>
+        /// 右键刷新设备信息
+        /// </summary>
+        private void RefreshDeviceInfo()
+        {
+            if (!_isHandshakeSuccess)
+            {
+                _logOutput.Append("请先完成设备握手，再刷新信息", Color.Orange);
+                return;
+            }
+
+            if (!serialComm.IsOpen)
+            {
+                _logOutput.Append("请先打开串口", Color.Orange);
+                return;
+            }
+            try
+            {
+                dataGridView1.Rows.Clear();
+                DeviceInfo.Clear();
+                // 直接通过串口发送获取信息指令
+                string getInfoCmd = protocolLoader.Cmd_GetInfo;
+                serialComm.SendString(getInfoCmd);
+                _waitingForDeviceInfo = true;
+                _logOutput.Append("正在刷新设备信息", Color.LimeGreen);
+            }
+            catch (Exception ex)
+            {
+                _logOutput.Append("发送失败：" + ex.Message, Color.Orange);
+            }
+        }
         #endregion
 
         #region 打开高级设置窗口
         private void advancedSettingButton_Click(object sender, EventArgs e)
         {
-            //先打开输入密码界面
-            QH_Firmware.Other_UI.password frm = new QH_Firmware.Other_UI.password();
-            frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
-            frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
+            // 打开密码窗口（显示在软件正中央）
+            Other_UI.password pwdForm = new Other_UI.password();
+            pwdForm.StartPosition = FormStartPosition.CenterParent; // 居中
+
+            if (pwdForm.ShowDialog() == DialogResult.OK)
+            {
+                // 密码正确 → 打开高级设置（也居中）
+                Advanced advanced = new Advanced(this);
+                advanced.StartPosition = FormStartPosition.CenterParent;
+                advanced.ShowDialog();
+            }
         }
         #endregion
 
@@ -497,6 +551,31 @@ namespace QH_Firmware
             frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
         }
 
+        #endregion
+
+        #region  加载固件
+        private void loadFileButton_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog ofd = new OpenFileDialog())
+            {
+                ofd.Filter = "固件文件 (*.bin;*.hex)|*.bin;*.hex";
+                ofd.Title = "选择固件";
+
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    string filePath = ofd.FileName;
+                    string area = comboBox3.Text.Trim();       // 区域
+                    string deviceModel = textBox1.Text.Trim(); // 设备型号
+
+                    bool ok = _floading.LoadAndStartUpgrade(filePath, area, deviceModel, _isHandshakeSuccess);
+
+                    if (ok)
+                    {
+                        fileNameLabel.Text = $"文件名：{_floading.FileName}";
+                    }
+                }
+            }
+        }
         #endregion
     }
 }

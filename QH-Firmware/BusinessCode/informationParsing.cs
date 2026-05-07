@@ -1,11 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Windows.Forms;
 
 namespace QH_Firmware
 {
     /// <summary>
-    /// 设备信息协议解析工具类（独立完整版）
+    /// 设备信息协议解析工具类
     /// </summary>
     public static class InformationParsing
     {
@@ -166,6 +167,32 @@ namespace QH_Firmware
                 default:
                     return key; // 其他扩展键名原样显示
             }
+        }
+        /// <summary>
+        /// 给 DataGridView 添加右键菜单
+        /// </summary>
+        public static void InitGridContextMenu(
+            DataGridView dgv,
+            Func<bool> isSerialOpen,
+            Action refreshAction)
+        {
+            var menu = new ContextMenuStrip();
+            var item = new ToolStripMenuItem("刷新设备信息");
+
+            item.Click += (s, e) =>
+            {
+                if (!isSerialOpen())
+                {
+                    MessageBox.Show("请先打开串口", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                dgv.Rows.Clear();
+                refreshAction?.Invoke();
+            };
+
+            menu.Items.Add(item);
+            dgv.ContextMenuStrip = menu;
         }
     }
 }
