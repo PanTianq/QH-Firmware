@@ -166,7 +166,8 @@ namespace QH_Firmware
             set { _isOnline = value; }
         }
         private DateTime _lastReceiveTime = DateTime.Now;
-        private const int ReceiveTimeoutSeconds = 20;
+        private const int ReceiveTimeoutSeconds = 20;//20s超时断开（仅未联机时）                                          
+        public const int GLOBAL_COMMAND_ACK_TIMEOUT = 20; // 发送后等待应答超时，用在固件升级中
         private bool _deviceInfoReceived = false;  // 开关
 
         private void ReceiveLoop()

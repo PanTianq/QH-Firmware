@@ -2,6 +2,8 @@
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace QH_Firmware
 {
@@ -31,6 +33,11 @@ namespace QH_Firmware
         public event Action<int> OnProgressChanged;
         private bool _deviceReadyResponded;
 
+        // 全局应答超时
+        private readonly int _ackTimeout = SerialCommunication.GLOBAL_COMMAND_ACK_TIMEOUT;
+        private DateTime _lastSendTime;
+        private bool _isWaitingAck;
+
         public Floading(SerialCommunication serialComm, ProtocolLoading protocolLoader, LogOutput logOutput)
         {
             _serialComm = serialComm;
@@ -39,8 +46,39 @@ namespace QH_Firmware
             _deviceReadyResponded = false;
         }
 
+        // 启动超时检测
+        private void StartWaitAck()
+        {
+            _isWaitingAck = true;
+            _lastSendTime = DateTime.Now;
+            Task.Run(WaitAckTimeoutCheck);
+        }
+
+        // 停止等待
+        private void StopWaitAck()
+        {
+            _isWaitingAck = false;
+        }
+
+        // 超时检测任务
+        private async void WaitAckTimeoutCheck()
+        {
+            while (_isWaitingAck)
+            {
+                await Task.Delay(500);
+
+                if ((DateTime.Now - _lastSendTime).TotalSeconds > _ackTimeout)
+                {
+                    _logOutput.Append($"[超时] 设备未应答，超时{_ackTimeout}秒！", Color.Orange);
+                    _isWaitingAck = false;
+                    _deviceReadyResponded = false;
+                    return;
+                }
+            }
+        }
+
         // ================================
-        // 统一获取区域日志提示
+        // 统一日志提示
         // ================================
         private string GetLogTip(string tipType)
         {
@@ -50,66 +88,35 @@ namespace QH_Firmware
             {
                 switch (tipType)
                 {
-                    case "LoadSuccess":
-                        baseTip = $"固件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}";
-                        break;
-                    case "UploadComplete":
-                        baseTip = "固件上传全部完成！";
-                        break;
-                    case "BurnSuccess":
-                        baseTip = "固件烧写成功！";
-                        break;
-                    case "LoadFail":
-                        baseTip = "固件加载失败";
-                        break;
-                    default:
-                        baseTip = "操作成功";
-                        break;
+                    case "LoadSuccess": baseTip = $"固件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}"; break;
+                    case "UploadComplete": baseTip = "固件上传全部完成！"; break;
+                    case "BurnSuccess": baseTip = "固件烧写成功！"; break;
+                    case "LoadFail": baseTip = "固件加载失败"; break;
+                    default: baseTip = "操作成功"; break;
                 }
             }
             else if (_currentArea == "程序参数")
             {
                 switch (tipType)
                 {
-                    case "LoadSuccess":
-                        baseTip = $"参数文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}";
-                        break;
-                    case "UploadComplete":
-                        baseTip = "参数文件上传全部完成！";
-                        break;
-                    case "BurnSuccess":
-                        baseTip = "参数写入成功！";
-                        break;
-                    case "LoadFail":
-                        baseTip = "参数文件加载失败";
-                        break;
-                    default:
-                        baseTip = "操作成功";
-                        break;
+                    case "LoadSuccess": baseTip = $"参数文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}"; break;
+                    case "UploadComplete": baseTip = "参数文件上传全部完成！"; break;
+                    case "BurnSuccess": baseTip = "参数写入成功！"; break;
+                    case "LoadFail": baseTip = "参数文件加载失败"; break;
+                    default: baseTip = "操作成功"; break;
                 }
             }
             else
             {
                 switch (tipType)
                 {
-                    case "LoadSuccess":
-                        baseTip = $"文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}";
-                        break;
-                    case "UploadComplete":
-                        baseTip = "文件上传全部完成！";
-                        break;
-                    case "BurnSuccess":
-                        baseTip = "文件写入成功！";
-                        break;
-                    case "LoadFail":
-                        baseTip = "文件加载失败";
-                        break;
-                    default:
-                        baseTip = "操作成功";
-                        break;
+                    case "LoadSuccess": baseTip = $"文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}"; break;
+                    case "UploadComplete": baseTip = "文件上传全部完成！"; break;
+                    case "BurnSuccess": baseTip = "文件写入成功！"; break;
+                    case "LoadFail": baseTip = "文件加载失败"; break;
+                    default: baseTip = "操作成功"; break;
                 }
             }
-
             return baseTip;
         }
 
@@ -126,8 +133,6 @@ namespace QH_Firmware
                 }
 
                 string fileName = Path.GetFileName(filePath);
-
-                // 只有应用程序(R1) 校验型号
                 if (area == "应用程序(R1)" && !string.IsNullOrWhiteSpace(deviceModel))
                 {
                     string model = deviceModel.Trim();
@@ -138,21 +143,13 @@ namespace QH_Firmware
                     }
                 }
 
-                // ==============================================
-                // 所有区域统一：读取文件 + 计算校验和
-                // ==============================================
                 FirmwareData = File.ReadAllBytes(filePath);
                 FileName = fileName;
                 Checksum = CalculateChecksum(FirmwareData);
                 _deviceReadyResponded = false;
 
                 _logOutput.Append(GetLogTip("LoadSuccess"), Color.LimeGreen);
-
-                // ==============================================
-                // 所有区域统一：发送设备准备就绪指令
-                // ==============================================
                 SendDeviceReadyCommand();
-
                 return true;
             }
             catch
@@ -169,6 +166,7 @@ namespace QH_Firmware
                 string prefix = _protocolLoader.Cmd_FirmwareHeader.Split('{')[0].Trim();
                 string sendCmd = $"{prefix} {TotalPackets} 0x{Checksum:X8}";
                 _serialComm.SendString(sendCmd);
+                StartWaitAck(); 
             }
             catch
             {
@@ -185,7 +183,7 @@ namespace QH_Firmware
             }
             if (!_deviceReadyResponded)
             {
-                _logOutput.Append("等待设备准备就绪...", Color.Orange);
+                _logOutput.Append("等待设备准备就绪...", Color.LimeGreen);
                 return;
             }
             _currentPacketIndex = 0;
@@ -217,6 +215,7 @@ namespace QH_Firmware
             Array.Copy(firmwarePacket, 0, sendData, headerBytes.Length, firmwarePacket.Length);
 
             _serialComm.Send(sendData);
+            StartWaitAck();
 
             int progress = (int)((_currentPacketIndex + 1) * 100.0 / TotalPackets);
             OnProgressChanged?.Invoke(progress);
@@ -224,6 +223,8 @@ namespace QH_Firmware
 
         public void HandleUpgradeResponse(byte[] buffer)
         {
+            StopWaitAck(); // 收到应答，停止超时
+
             string recv = Encoding.ASCII.GetString(buffer).Trim();
             string ack_inform = _protocolLoader.Ack_SetInfo.Trim();
 
@@ -242,7 +243,7 @@ namespace QH_Firmware
                 if (clean.Contains(expectReady))
                 {
                     _deviceReadyResponded = true;
-                    _logOutput.Append("设备准备就绪，等待上传...", Color.LimeGreen);
+                    _logOutput.Append("设备准备就绪，开始上传...", Color.LimeGreen);
                     return;
                 }
             }
@@ -274,6 +275,7 @@ namespace QH_Firmware
             Checksum = 0;
             _currentPacketIndex = 0;
             _deviceReadyResponded = false;
+            StopWaitAck();
         }
 
         private void SendUpdateInformCommand()
@@ -292,15 +294,11 @@ namespace QH_Firmware
                 {
                     cmd = $"{cmd_head} {{#DEV_INFO:PFN={FileName};}}";
                 }
-                else
-                {
-                    // 其他区域默认发送时间
-                    cmd = cmd = $"{cmd_head} {{#DEV_INFO:FF={now};}}"; 
-                }
 
                 if (!string.IsNullOrEmpty(cmd))
                 {
                     _serialComm.SendString(cmd);
+                    StartWaitAck();
                 }
             }
             catch
