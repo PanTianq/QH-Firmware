@@ -4,154 +4,46 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-// 加载协议文件、管理历史记录、解析协议内容到变量，提供事件通知界面更新
+
 namespace QH_Firmware
 {
+    /// <summary>
+    /// 协议加载管理类
+    /// 功能：加载 JSON 协议、解析指令、管理最近文件、提供事件通知界面
+    /// </summary>
     public class ProtocolLoading
     {
+        #region 公共属性
+        /// <summary>当前加载的协议配置</summary>
         public ProtocolConfig CurrentConfig { get; set; }
+
+        /// <summary>当前协议文件路径</summary>
         public string CurrentFilePath { get; set; } = string.Empty;
+
+        /// <summary>最近打开的协议文件列表</summary>
         public List<string> RecentFiles { get; } = new List<string>();
+
+        /// <summary>最大历史文件数量</summary>
         public const int MAX_RECENT_FILES = 5;
+        #endregion
 
+        #region 事件
+        /// <summary>协议加载完成事件</summary>
         public event Action<string, string> ProtocolLoaded;
+
+        /// <summary>日志输出事件</summary>
         public event Action<string, Color> LogReceived;
+        #endregion
 
-        // 统一历史文件路径，避免重复拼接
+        #region 私有路径
+        /// <summary>历史文件存储目录</summary>
         private readonly string _historyFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FirmwareTool");
+
+        /// <summary>历史文件完整路径</summary>
         private string HistoryFilePath => Path.Combine(_historyFolder, "recentFiles.txt");
+        #endregion
 
-        /// <summary>
-        /// 正常加载协议（带日志）
-        /// </summary>
-        public bool LoadProtocolFile(string filePath)
-        {
-            if (!File.Exists(filePath))
-            {
-                LogReceived?.Invoke($"协议文件不存在：{filePath}",Color.Orange);
-                return false;
-            }
-
-            if (!Path.GetExtension(filePath).Equals(".json", StringComparison.OrdinalIgnoreCase))
-            {
-                LogReceived?.Invoke("请选择 .json 协议文件", Color.Orange);
-                return false;
-            }
-
-            try
-            {
-                string json = File.ReadAllText(filePath);
-                ProtocolConfig config = JsonConvert.DeserializeObject<ProtocolConfig>(json);
-
-                if (config == null || string.IsNullOrWhiteSpace(config.protocol_version) || config.commands == null)
-                {
-                    LogReceived?.Invoke("协议JSON格式错误：缺少必填字段", Color.Orange);
-                    return false;
-                }
-
-                CurrentConfig = config;
-                CurrentFilePath = filePath;
-                AddToRecentFiles(filePath);
-
-                ProtocolLoaded?.Invoke(Path.GetFileName(filePath), config.description);
-                LogReceived?.Invoke($"协议加载成功，协议版本：{config.protocol_version}", Color.LimeGreen);
-                // ==================== 新增：自动解析 ====================
-                ParseProtocolToVariables();
-                // ========================================================
-                return true;
-            }
-            catch (Exception ex)
-            {
-                LogReceived?.Invoke($"加载协议失败：{ex.Message}", Color.Orange);
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 静默加载（启动时用，无日志）
-        /// </summary>
-        public bool LoadProtocolFileSilent(string filePath)
-        {
-            try
-            {
-                if (!File.Exists(filePath) || !Path.GetExtension(filePath).Equals(".json", StringComparison.OrdinalIgnoreCase))
-                    return false;
-
-                ProtocolConfig config = JsonConvert.DeserializeObject<ProtocolConfig>(File.ReadAllText(filePath));
-                if (config == null || string.IsNullOrWhiteSpace(config.protocol_version) || config.commands == null)
-                    return false;
-
-                CurrentConfig = config;
-                CurrentFilePath = filePath;
-                AddToRecentFiles(filePath);
-                ParseProtocolToVariables(); // 新增
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// 加载本地历史记录
-        /// </summary>
-        public void LoadRecentFiles()
-        {
-            try
-            {
-                if (!File.Exists(HistoryFilePath)) return;
-
-                var lines = File.ReadAllLines(HistoryFilePath);
-                RecentFiles.Clear();
-                RecentFiles.AddRange(lines.Where(x => !string.IsNullOrEmpty(x) && File.Exists(x)));
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// 添加文件到历史列表（去重 + 置顶 + 限制数量）
-        /// </summary>
-        private void AddToRecentFiles(string filePath)
-        {
-            RecentFiles.RemoveAll(x => x.Equals(filePath, StringComparison.OrdinalIgnoreCase));
-            RecentFiles.Insert(0, filePath);
-
-            if (RecentFiles.Count > MAX_RECENT_FILES)
-                RecentFiles.RemoveAt(MAX_RECENT_FILES);
-
-            SaveRecentFiles();
-        }
-
-        /// <summary>
-        /// 保存历史到本地文件
-        /// </summary>
-        private void SaveRecentFiles()
-        {
-            try
-            {
-                Directory.CreateDirectory(_historyFolder);
-                File.WriteAllLines(HistoryFilePath, RecentFiles);
-            }
-            catch { }
-        }
-
-        /// <summary>
-        /// 清空所有历史（包括旧版残留文件，确保重启不恢复）
-        /// </summary>
-        public void ClearAllHistory()
-        {
-            RecentFiles.Clear();
-            SaveRecentFiles();
-
-            try
-            {
-                string oldLastProtocol = Path.Combine(_historyFolder, "lastProtocol.txt");
-                if (File.Exists(oldLastProtocol))
-                    File.Delete(oldLastProtocol);
-            }
-            catch { }
-        }
+        #region 协议指令变量（自动解析赋值）
         // 握手
         public string Cmd_Handshake { get; private set; }
         public string Ack_Handshake { get; private set; }
@@ -176,34 +68,174 @@ namespace QH_Firmware
         public string Cmd_Reboot { get; private set; }
         public string Ack_Reboot { get; private set; }
         public int Interval_Reboot { get; private set; }
+        #endregion
 
-        // ==================== 按协议解析 → 直接赋值到变量 ====================
+        #region 加载协议
+        /// <summary>
+        /// 正常加载协议文件（带日志输出）
+        /// </summary>
+        public bool LoadProtocolFile(string filePath)
+        {
+            // 文件不存在
+            if (!File.Exists(filePath))
+            {
+                LogReceived?.Invoke($"协议文件不存在：{filePath}", Color.Orange);
+                return false;
+            }
+
+            // 非 JSON 文件
+            if (!Path.GetExtension(filePath).Equals(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                LogReceived?.Invoke("请选择 .json 协议文件", Color.Orange);
+                return false;
+            }
+
+            try
+            {
+                string json = File.ReadAllText(filePath);
+                ProtocolConfig config = JsonConvert.DeserializeObject<ProtocolConfig>(json);
+
+                // 校验协议有效性
+                if (config == null || string.IsNullOrWhiteSpace(config.protocol_version) || config.commands == null)
+                {
+                    LogReceived?.Invoke("协议JSON格式错误：缺少必填字段", Color.Orange);
+                    return false;
+                }
+
+                // 赋值并加载
+                CurrentConfig = config;
+                CurrentFilePath = filePath;
+                AddToRecentFiles(filePath);
+                ParseProtocolToVariables();
+
+                ProtocolLoaded?.Invoke(Path.GetFileName(filePath), config.description);
+                LogReceived?.Invoke($"协议加载成功 | 版本：{config.protocol_version}", Color.LimeGreen);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogReceived?.Invoke($"加载协议失败：{ex.Message}", Color.Orange);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 静默加载协议（程序启动时使用，无日志）
+        /// </summary>
+        public bool LoadProtocolFileSilent(string filePath)
+        {
+            try
+            {
+                if (!File.Exists(filePath) || !Path.GetExtension(filePath).Equals(".json", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                string json = File.ReadAllText(filePath);
+                ProtocolConfig config = JsonConvert.DeserializeObject<ProtocolConfig>(json);
+
+                if (config == null || string.IsNullOrWhiteSpace(config.protocol_version) || config.commands == null)
+                    return false;
+
+                CurrentConfig = config;
+                CurrentFilePath = filePath;
+                AddToRecentFiles(filePath);
+                ParseProtocolToVariables();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        #endregion
+
+        #region 最近文件管理
+        /// <summary>
+        /// 加载本地保存的历史文件
+        /// </summary>
+        public void LoadRecentFiles()
+        {
+            try
+            {
+                if (!File.Exists(HistoryFilePath)) return;
+
+                var lines = File.ReadAllLines(HistoryFilePath);
+                RecentFiles.Clear();
+                RecentFiles.AddRange(lines.Where(x => !string.IsNullOrWhiteSpace(x) && File.Exists(x)));
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 添加文件到最近列表（去重、置顶、限制数量）
+        /// </summary>
+        private void AddToRecentFiles(string filePath)
+        {
+            RecentFiles.RemoveAll(x => x.Equals(filePath, StringComparison.OrdinalIgnoreCase));
+            RecentFiles.Insert(0, filePath);
+
+            // 限制最大数量
+            if (RecentFiles.Count > MAX_RECENT_FILES)
+                RecentFiles.RemoveAt(MAX_RECENT_FILES);
+
+            SaveRecentFiles();
+        }
+
+        /// <summary>
+        /// 保存历史文件到本地
+        /// </summary>
+        private void SaveRecentFiles()
+        {
+            try
+            {
+                Directory.CreateDirectory(_historyFolder);
+                File.WriteAllLines(HistoryFilePath, RecentFiles);
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 清空所有历史记录，并提示用户重新加载协议
+        /// </summary>
+        public void ClearAllHistory()
+        {
+            RecentFiles.Clear();
+            SaveRecentFiles();
+
+            try
+            {
+                string oldFile = Path.Combine(_historyFolder, "lastProtocol.txt");
+                if (File.Exists(oldFile))
+                    File.Delete(oldFile);
+            }
+            catch { }
+        }
+        #endregion
+
+        #region 协议解析到变量
+        /// <summary>
+        /// 将协议指令解析到类变量，方便外部直接调用
+        /// </summary>
         public void ParseProtocolToVariables()
         {
-            // 先清空
-            Cmd_Handshake = string.Empty;
-            Ack_Handshake = string.Empty;
+            // 清空旧数据
+            Cmd_Handshake = Ack_Handshake = string.Empty;
             Interval_Handshake = 0;
 
-            Cmd_GetInfo = string.Empty;
-            Ack_GetInfo = string.Empty;
+            Cmd_GetInfo = Ack_GetInfo = string.Empty;
             Interval_GetInfo = 0;
 
-            Cmd_SetInfo = string.Empty;
-            Ack_SetInfo = string.Empty;
+            Cmd_SetInfo = Ack_SetInfo = string.Empty;
             Interval_SetInfo = 0;
 
-            Cmd_FirmwareHeader = string.Empty;
-            Ack_FirmwareHeader = string.Empty;
+            Cmd_FirmwareHeader = Ack_FirmwareHeader = string.Empty;
             Interval_FirmwareHeader = 0;
 
-            Cmd_Reboot = string.Empty;
-            Ack_Reboot = string.Empty;
+            Cmd_Reboot = Ack_Reboot = string.Empty;
             Interval_Reboot = 0;
 
             if (CurrentConfig?.commands == null) return;
 
-            // 按协议名称匹配 → 直接赋值变量
+            // 按指令名称匹配赋值
             foreach (var cmd in CurrentConfig.commands)
             {
                 switch (cmd.name.Trim())
@@ -240,12 +272,15 @@ namespace QH_Firmware
                 }
             }
 
-            LogReceived?.Invoke("协议解析成功", Color.LimeGreen);
+            LogReceived?.Invoke("协议指令解析完成", Color.LimeGreen);
         }
-        // ==========================================================================
+        #endregion
     }
 
-    // 协议配置实体
+    #region 协议实体类
+    /// <summary>
+    /// 协议根配置
+    /// </summary>
     public class ProtocolConfig
     {
         public string protocol_version { get; set; }
@@ -256,7 +291,9 @@ namespace QH_Firmware
         public Dictionary<string, string> variables { get; set; }
     }
 
-    // 单条指令实体
+    /// <summary>
+    /// 单条协议指令
+    /// </summary>
     public class ProtocolCommand
     {
         public string name { get; set; }
@@ -264,4 +301,5 @@ namespace QH_Firmware
         public int interval { get; set; }
         public string confirmation { get; set; }
     }
+    #endregion
 }

@@ -2,172 +2,134 @@
 using QH_Firmware.SoftUI;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 
 namespace QH_Firmware
 {
-    /// <summary>
-    /// 主窗体：UI交互层，只处理界面显示和事件调用
-    /// 已适配《设备信息通信协议（键值对版）》
-    /// </summary>
     public partial class Form1 : Form
     {
-        // 串口通信操作类（已独立封装）
-        public readonly SerialCommunication serialComm = new SerialCommunication();
-        // 协议加载与解析类（已独立封装）
-        public readonly ProtocolLoading protocolLoader = new ProtocolLoading();
-        // 日志输出类（已独立封装）
-        public readonly LogOutput _logOutput;
-        // 协议（已独立封装）
-        public readonly ProtocolLoading _protocolLoader;
-        // 加载固件（已独立封装）
-        private Floading _floading;
-        // 系统默认支持的波特率列表
-        private static readonly int[] DefaultBaudRates = { 9600, 115200 };
-        // 防止串口操作重复点击
-        private bool _isPortOperating;
-        // 工具版本号
-        public string version = "_V1.0";
-        private AutoSendTimer _handshakeTimer;
-        // 握手是否成功
-        public bool _isHandshakeSuccess;
-        // 设备信息（键值对，适配新协议）
-        public Dictionary<string, string> DeviceInfo { get; set; } = new Dictionary<string, string>();
-        // 只有这个为 true 时，才开始解析 #DEV_INFO: 帧
-        private bool _waitingForDeviceInfo;
+        #region 全局对象
+        /// <summary>串口通信</summary>
+        public readonly SerialCommunication serialComm;
 
-        #region 主窗体构造
-        /// <summary>
-        /// 主窗体构造函数
-        /// 功能说明：
-        /// 1. 初始化窗体及所有界面控件、组件
-        /// 2. 设置默认控件状态（未握手时禁用操作按钮）
-        /// 3. 绑定串口、协议、日志、固件升级相关事件
-        /// 4. 初始化协议交互、设备信息解析、右键菜单等核心功能
-        /// 5. 建立界面与底层业务逻辑的关联（日志、串口、协议、升级）
-        /// </summary>
+        /// <summary>协议加载</summary>
+        public readonly ProtocolLoading protocolLoader;
+
+        /// <summary>日志输出</summary>
+        public readonly LogOutput _logOutput;
+
+        /// <summary>固件升级</summary>
+        private Floading _floading;
+
+        /// <summary>自动握手定时器</summary>
+        private AutoSendTimer _handshakeTimer;
+
+        /// <summary>默认波特率</summary>
+        private static readonly int[] DefaultBaudRates = { 9600, 115200 };
+
+        /// <summary>防重复点击</summary>
+        private bool _isPortOperating;
+
+        /// <summary>版本号</summary>
+        public string version = "_V1.0";
+
+        /// <summary>握手状态</summary>
+        public bool _isHandshakeSuccess;
+
+        /// <summary> 高级设置窗口正在写入标志</summary>
+        public bool IsAdvancedWriting { get; set; } = false;
+        /// <summary>设备信息字典</summary>
+        public Dictionary<string, string> DeviceInfo { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>等待接收设备信息</summary>
+        private bool _waitingForDeviceInfo;
+        #endregion
+
+        #region 构造函数
         public Form1()
         {
             InitializeComponent();
-            // 设置窗口标题（工具名称+版本号）
             this.Text = "QH Firmware 固件烧录工具" + version;
-            // ===================== 初始控件状态 =====================
-            // 设备信息未解析成功时，默认禁用固件操作、系统设置相关按钮
+
+            // 初始禁用按钮
             loadFileButton.Enabled = false;
             burnButton.Enabled = false;
             advancedSettingButton.Enabled = false;
             resetbutton.Enabled = false;
 
-            // ===================== 组件初始化 =====================
-            // 初始化日志输出组件，绑定日志显示控件
+            // 初始化核心组件
+            serialComm = new SerialCommunication();
+            protocolLoader = new ProtocolLoading();
             _logOutput = new LogOutput(richTextBox1);
 
-            // 绑定窗体加载事件
-            Load += Form1_Load;
-
-            // ===================== 事件绑定 =====================
-            // 串口日志 → 转发到界面日志组件
+            // 绑定事件
             serialComm.LogReceived += (msg, color) => _logOutput.Append(msg, color);
-            // 串口状态变更 → 更新界面按钮状态
             serialComm.PortStateChanged += UpdatePortButtonState;
-            // 协议加载日志 → 转发到界面日志组件
             protocolLoader.LogReceived += (msg, color) => _logOutput.Append(msg, color);
 
-            // ===================== 协议加载完成回调 =====================
-            // 协议加载成功后：更新状态栏提示 + 启用打开串口按钮
+            // 协议加载完成
             protocolLoader.ProtocolLoaded += (fileName, desc) =>
             {
                 toolStripStatusLabel1.Text = $"协议：{fileName}";
                 openPortButton.Enabled = true;
             };
 
-            // ===================== 通信流程初始化 =====================
-            // 初始握手状态：未成功
-            _isHandshakeSuccess = false;
-            // 初始化协议交互（握手、数据解析）
+            // 初始化协议交互
             protocolInteraction();
 
-            // 初始化设备信息表格右键菜单
-            InformationParsing.InitGridContextMenu(
-                dataGridView1,
-                () => serialComm.IsOpen,
-                RefreshDeviceInfo
-            );
+            // 设备信息表格右键菜单
+            InformationParsing.InitGridContextMenu(dataGridView1, () => serialComm.IsOpen, RefreshDeviceInfo);
 
-            // 初始化固件升级操作类
+            // 初始化升级
             _floading = new Floading(serialComm, protocolLoader, _logOutput);
 
-            // 绑定固件升级进度条事件
+            // 进度条绑定
             _floading.OnProgressChanged += progress =>
             {
                 if (progressBar1.InvokeRequired)
-                {
                     progressBar1.Invoke(new Action(() => progressBar1.Value = progress));
-                }
                 else
-                {
                     progressBar1.Value = progress;
-                }
             };
-        }
-        #endregion 
 
-        #region 窗体事件
-        /// <summary>
-        /// 窗体加载时初始化：串口、波特率、最近文件、协议自动加载
-        /// </summary>
+            Load += Form1_Load;
+        }
+        #endregion
+
+        #region 窗体加载 & 关闭
         private void Form1_Load(object sender, EventArgs e)
         {
-            // 初始化波特率下拉框
             InitializeBaudRateComboBox();
-            // 初始化设备区域
             InitializeRegion();
-            // 获取可用串口列表
             GetSerialPorts();
-
-            // 初始化最近协议文件菜单
             InitializeRecentFilesMenu();
-            // 初始化进度条
             progressBar1.Value = 0;
-            // 协议是否加载成功标记
+
             bool protocolLoaded = false;
-            // 加载最近使用过的协议文件记录
             protocolLoader.LoadRecentFiles();
-            // 如果有最近文件，则尝试自动加载第一个
+
+            // 自动加载最近协议
             if (protocolLoader.RecentFiles.Count > 0)
             {
                 string lastFile = protocolLoader.RecentFiles[0];
-                if (File.Exists(lastFile))
+                if (File.Exists(lastFile) && protocolLoader.LoadProtocolFileSilent(lastFile))
                 {
-                    // 静默加载（不输出日志）
-                    if (protocolLoader.LoadProtocolFileSilent(lastFile))
-                    {
-                        toolStripStatusLabel1.Text = $"协议：{Path.GetFileName(lastFile)}";
-                        openPortButton.Enabled = true;
-                        protocolLoaded = true;
-                        UpdateRecentFilesMenu();
-                    }
+                    toolStripStatusLabel1.Text = $"协议：{Path.GetFileName(lastFile)}";
+                    openPortButton.Enabled = true;
+                    protocolLoaded = true;
+                    UpdateRecentFilesMenu();
                 }
             }
-            // 根据加载结果输出日志
+
             if (protocolLoaded)
-            {
-                _logOutput.Append($"协议加载成功，协议版本：{protocolLoader.CurrentConfig.protocol_version}", Color.LimeGreen);
-            }
+                _logOutput.Append($"协议加载成功 | 版本：{protocolLoader.CurrentConfig.protocol_version}", Color.LimeGreen);
             else
-            {
                 _logOutput.Append("请加载协议文件(文件-加载协议)", Color.Orange);
-                openPortButton.Enabled = false;
-            }
         }
-        /// <summary>
-        /// 窗体关闭时：释放串口资源
-        /// </summary>
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             serialComm.Close();
@@ -176,73 +138,49 @@ namespace QH_Firmware
         }
         #endregion
 
-        #region 串口列表&波特率
-        /// <summary>
-        /// 获取系统所有可用串口
-        /// </summary>
+        #region 串口列表 & 波特率
         private void GetSerialPorts()
         {
             try
             {
                 string selected = comboBox1.Text;
                 string[] ports = SerialCommunication.GetPortNames();
-                // 只有串口发生变化时才刷新，避免闪烁
+
                 if (IsComboBoxDifferent(comboBox1, ports))
                 {
                     comboBox1.BeginUpdate();
                     comboBox1.Items.Clear();
                     comboBox1.Items.AddRange(ports);
                     comboBox1.EndUpdate();
-                    // 保持原来选中的串口（如果存在）
-                    comboBox1.SelectedItem = comboBox1.Items.Contains(selected)
-                        ? selected
-                        : comboBox1.Items.Count > 0 ? comboBox1.Items[0] : null;
+                    comboBox1.SelectedItem = comboBox1.Items.Contains(selected) ? selected : (comboBox1.Items.Count > 0 ? comboBox1.Items[0] : null);
                 }
             }
             catch { }
         }
-        /// <summary>
-        /// 判断下拉框内容是否与新列表不同（用于优化刷新）
-        /// </summary>
+
         private bool IsComboBoxDifferent(ComboBox comboBox, string[] items)
         {
-            if (comboBox.Items.Count != items.Length)
-                return true;
-
+            if (comboBox.Items.Count != items.Length) return true;
             for (int i = 0; i < items.Length; i++)
-            {
                 if (i >= comboBox.Items.Count || comboBox.Items[i].ToString() != items[i])
                     return true;
-            }
             return false;
         }
-        /// <summary>
-        /// 刷新串口按钮点击事件
-        /// </summary>
-        private void RefreshButton_Click(object sender, EventArgs e)
-        {
-            GetSerialPorts();
-        }
-        /// <summary>
-        /// 初始化波特率下拉框默认值
-        /// </summary>
+
+        private void RefreshButton_Click(object sender, EventArgs e) => GetSerialPorts();
+
         private void InitializeBaudRateComboBox()
         {
             comboBox2.Items.Clear();
             foreach (int rate in DefaultBaudRates)
                 comboBox2.Items.Add(rate.ToString());
-            // 默认选中 115200
             comboBox2.SelectedItem = "115200";
         }
         #endregion
 
-        #region 串口开关控制
-        /// <summary>
-        /// 打开/关闭串口按钮点击事件
-        /// </summary>
+        #region 打开 / 关闭串口
         private void openPortButton_Click(object sender, EventArgs e)
         {
-            // 防止重复点击
             if (_isPortOperating) return;
             try
             {
@@ -253,35 +191,19 @@ namespace QH_Firmware
                 {
                     int baudRate = int.Parse(comboBox2.Text);
                     serialComm.Open(comboBox1.Text, baudRate);
-                    toolStripStatusLabel1.Text = $"{comboBox1.Text}@{comboBox2.Text} 协议: {Path.GetFileName(protocolLoader.CurrentFilePath)}";
+                    toolStripStatusLabel1.Text = $"{comboBox1.Text}@{comboBox2.Text} | 协议: {Path.GetFileName(protocolLoader.CurrentFilePath)}";
 
-                    // 打开串口时清空设备信息表格及日志
                     dataGridView1.Rows.Clear();
                     DeviceInfo.Clear();
                     richTextBox1.Clear();
 
-                    // 从UI控件获取值，传入定时器
                     string deviceModel = textBox1.Text.Trim();
-                    string firmwareRegion = comboBox3.SelectedIndex.ToString(); // 直接用索引作为数字
+                    string firmwareRegion = comboBox3.SelectedIndex.ToString();
                     _handshakeTimer.StartHandshake(deviceModel, firmwareRegion);
                 }
                 else
                 {
-                    // 打开串口
                     serialComm.Close();
-                    _handshakeTimer.Stop();
-                    _waitingForDeviceInfo = false; // 重置设备解析状态
-                    progressBar1.Value = 0;
-                    toolStripStatusLabel1.Text = "就绪";
-
-                    fileNameLabel.Text = "文件名：";
-
-                    // 关闭串口，重置按钮状态
-                    _isHandshakeSuccess = false;
-                    loadFileButton.Enabled = false;
-                    burnButton.Enabled = false;
-                    advancedSettingButton.Enabled = false;
-                    resetbutton.Enabled = false;
                 }
             }
             finally
@@ -290,47 +212,53 @@ namespace QH_Firmware
                 openPortButton.Enabled = true;
             }
         }
-        /// <summary>
-        /// 根据串口状态更新按钮文字、颜色、控件可用性
-        /// </summary>
+
+        /// <summary>统一刷新控件状态</summary>
         private void UpdatePortButtonState(bool isOpen)
         {
-            // 跨线程调用UI必须用 Invoke
             if (openPortButton.InvokeRequired)
             {
                 openPortButton.Invoke(new Action<bool>(UpdatePortButtonState), isOpen);
                 return;
             }
-            // 更新按钮显示
+
             openPortButton.Text = isOpen ? "关闭串口" : "打开串口";
-            openPortButton.BackColor = isOpen
-                ? Color.FromArgb(220, 20, 60)// 红色：已打开
-                : Color.FromArgb(34, 139, 34); // 绿色：已关闭
-            // 打开串口后禁止修改串口号和波特率
+            openPortButton.BackColor = isOpen ? Color.Crimson : Color.Green;
+
+            // 串口配置
             comboBox1.Enabled = !isOpen;
             comboBox2.Enabled = !isOpen;
             refreshButton.Enabled = !isOpen;
-            // 控制设备区域控件：串口打开后禁用
+
+            // 设备配置
             textBox1.Enabled = !isOpen;
             comboBox3.Enabled = !isOpen;
+
+            // 功能按钮：串口打开 + 握手成功 才可用
+            loadFileButton.Enabled = isOpen && _isHandshakeSuccess;
+            burnButton.Enabled = isOpen && _isHandshakeSuccess;
+            advancedSettingButton.Enabled = isOpen && _isHandshakeSuccess;
+            resetbutton.Enabled = isOpen && _isHandshakeSuccess;
+
+            // 关闭时重置状态
+            if (!isOpen)
+            {
+                _handshakeTimer?.Stop();
+                _waitingForDeviceInfo = false;
+                _isHandshakeSuccess = false;
+                progressBar1.Value = 0;
+                fileNameLabel.Text = "文件名：";
+                toolStripStatusLabel1.Text = "就绪";
+            }
         }
         #endregion
 
-        #region 协议文件加载 & 最近文件菜单
-        /// <summary>
-        /// 文件菜单点击（空实现）
-        /// </summary>
-        private void 文件FToolStripMenuItem_Click(object sender, EventArgs e) { }
-        /// <summary>
-        /// 手动加载协议文件
-        /// </summary>
+        #region 协议文件 & 最近文件
         private void LoadProtocolMenuItem_Click(object sender, EventArgs e)
         {
             using (OpenFileDialog od = new OpenFileDialog())
             {
                 od.Filter = "JSON协议文件|*.json|所有文件|*.*";
-                od.FilterIndex = 1;
-                od.RestoreDirectory = true;
                 od.Title = "选择协议文件";
                 if (od.ShowDialog() == DialogResult.OK)
                 {
@@ -339,68 +267,53 @@ namespace QH_Firmware
                 }
             }
         }
-        /// <summary>
-        /// 清除所有协议历史记录（同时清空当前加载的协议）
-        /// </summary>
+
         private void ClearHistoryItem_Click(object sender, EventArgs e)
         {
             if (MessageBox.Show("确定清除最近文件记录？", "提示", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             {
-                // 清除历史记录文件
                 protocolLoader.ClearAllHistory();
-                // 清空当前加载的协议
                 protocolLoader.CurrentConfig = null;
                 protocolLoader.CurrentFilePath = string.Empty;
-                // 更新界面
                 UpdateRecentFilesMenu();
+
+                _logOutput.Append("请加载协议文件(文件-加载协议)", Color.Orange);
+
                 toolStripStatusLabel1.Text = "就绪";
                 openPortButton.Enabled = false;
             }
         }
-        /// <summary>
-        /// 点击最近文件列表，快速加载协议
-        /// </summary>
+
         private void RecentFileItem_Click(object sender, EventArgs e)
         {
             if (sender is ToolStripMenuItem item && item.Tag is string path)
-            {
                 protocolLoader.LoadProtocolFile(path);
-            }
         }
-        /// <summary>
-        /// 初始化最近文件菜单
-        /// </summary>
+
         private void InitializeRecentFilesMenu()
         {
             recentFilesToolStripMenuItem1.DropDownItems.Clear();
             UpdateRecentFilesMenu();
         }
-        /// <summary>
-        /// 更新最近文件菜单显示
-        /// </summary>
+
         private void UpdateRecentFilesMenu()
         {
             recentFilesToolStripMenuItem1.DropDownItems.Clear();
-            // 无历史记录时显示灰色“无”
             if (protocolLoader.RecentFiles.Count == 0)
             {
                 recentFilesToolStripMenuItem1.DropDownItems.Add(new ToolStripMenuItem("(无)") { Enabled = false });
                 return;
             }
-            // 添加所有最近文件
+
             foreach (var file in protocolLoader.RecentFiles)
             {
                 if (!File.Exists(file)) continue;
                 string name = Path.GetFileName(file);
-                ToolStripMenuItem item = new ToolStripMenuItem($"{name}  {file}")
-                {
-                    Tag = file,
-                    ToolTipText = file
-                };
+                ToolStripMenuItem item = new ToolStripMenuItem($"{name}  {file}") { Tag = file, ToolTipText = file };
                 item.Click += RecentFileItem_Click;
                 recentFilesToolStripMenuItem1.DropDownItems.Add(item);
             }
-            // 添加分隔线 + 清除历史按钮
+
             recentFilesToolStripMenuItem1.DropDownItems.Add(new ToolStripSeparator());
             ToolStripMenuItem clear = new ToolStripMenuItem("清除历史记录");
             clear.Click += ClearHistoryItem_Click;
@@ -408,104 +321,84 @@ namespace QH_Firmware
         }
         #endregion
 
-        #region 设备区域
+        #region 设备型号 & 区域保存
         private void textBox1_TextChanged(object sender, EventArgs e)
         {
-            // 保存值
             Properties.Settings.Default.textBox1Value = textBox1.Text;
             Properties.Settings.Default.Save();
         }
+
         private void comboBox3_SelectedIndexChanged(object sender, EventArgs e)
         {
-            // 保存选中索引
             Properties.Settings.Default.comboBox3Index = comboBox3.SelectedIndex;
             Properties.Settings.Default.Save();
         }
+
         private void InitializeRegion()
         {
             if (string.IsNullOrEmpty(textBox1.Text))
-            {
                 textBox1.Text = "QH4011";
-            }
-            // 读取上次保存的值
-            if (Properties.Settings.Default.textBox1Value != "")
-            {
-                textBox1.Text = Properties.Settings.Default.textBox1Value;
-            }
 
-            // 2. comboBox3 默认选中第 2 项（索引 1）
+            if (!string.IsNullOrEmpty(Properties.Settings.Default.textBox1Value))
+                textBox1.Text = Properties.Settings.Default.textBox1Value;
+
             if (comboBox3.Items.Count > 1)
-            {
                 comboBox3.SelectedIndex = 1;
-            }
-            // 读取上次保存的值
+
             if (Properties.Settings.Default.comboBox3Index >= 0)
-            {
                 comboBox3.SelectedIndex = Properties.Settings.Default.comboBox3Index;
-            }
         }
         #endregion
 
-        #region 协议交互流程
+        #region 协议交互流程（握手 + 解析设备信息）
         private void protocolInteraction()
         {
             _handshakeTimer = new AutoSendTimer(serialComm, protocolLoader, _logOutput);
 
             serialComm.DataReceived += (buffer) =>
             {
-                // 加这一句 → 交给烧录逻辑处理
+                // 如果高级窗口正在写入，就跳过固件升级处理
+                if (IsAdvancedWriting)
+                    return;
+
                 _floading.HandleUpgradeResponse(buffer);
                 string recvStr = Encoding.ASCII.GetString(buffer).Trim();
 
-                // ===================== 握手校验（同步设置标志）=====================
+                // 握手验证
                 bool isHandshakeOk = _handshakeTimer.CheckHandshakeAck(recvStr);
                 if (isHandshakeOk)
                 {
-                    // 标记握手成功
                     _isHandshakeSuccess = true;
-                    // 先同步打开解析开关（必须在Invoke外面）
                     _waitingForDeviceInfo = true;
-                    Invoke((MethodInvoker)delegate {
-                        _handshakeTimer.SwitchToGetInfoMode();
-                    });
+                    Invoke((MethodInvoker)delegate { _handshakeTimer.SwitchToGetInfoMode(); });
                 }
 
-                // ===================== 未握手成功 → 禁止解析 =====================
-                if (!_waitingForDeviceInfo)
-                    return;
-                // ===================== 握手成功 → 才允许解析 =====================
-                var deviceDict = InformationParsing.ParseDeviceFrame(recvStr, out string logMsg);
+                if (!_waitingForDeviceInfo) return;
 
-                // 解析日志（不打印“未找到帧头”避免刷屏）
+                // 解析设备信息
+                var deviceDict = InformationParsing.ParseDeviceFrame(recvStr, out string logMsg);
                 if (!string.IsNullOrEmpty(logMsg) && !logMsg.Contains("未找到帧头"))
                     _logOutput.Append(logMsg, Color.Orange);
 
-                if (deviceDict == null)
-                    return;
+                if (deviceDict == null) return;
 
                 // 解析成功
                 DeviceInfo = deviceDict;
                 serialComm.IsOnline = true;
                 _handshakeTimer.Stop();
-                _waitingForDeviceInfo = false; // 解析完关闭，防止重复解析                        
+                _waitingForDeviceInfo = false;
 
-                Invoke((MethodInvoker)delegate {
+                Invoke((MethodInvoker)delegate
+                {
                     ShowDeviceInfoToGrid();
                     _logOutput.Append("设备信息解析完成", Color.LimeGreen);
-                    // 设备解析成功，启用所有按钮
-                    loadFileButton.Enabled = true;
-                    burnButton.Enabled = true;
-                    advancedSettingButton.Enabled = true;
-                    resetbutton.Enabled = true;
+                    UpdatePortButtonState(serialComm.IsOpen);
                 });
             };
         }
         #endregion
 
-        #region 设备信息显示（适配新协议键名）
-        /// <summary>
-        /// 将设备信息显示到 dataGridView1
-        /// </summary>
+        #region 设备信息显示
         private void ShowDeviceInfoToGrid()
         {
             dataGridView1.Columns.Clear();
@@ -527,29 +420,25 @@ namespace QH_Firmware
                 dataGridView1.Rows.Add(name, val);
             }
         }
-        /// <summary>
-        /// 右键刷新设备信息
-        /// </summary>
+
         private void RefreshDeviceInfo()
         {
             if (!_isHandshakeSuccess)
             {
-                _logOutput.Append("请先完成设备握手，再刷新信息", Color.Orange);
+                _logOutput.Append("请先完成设备握手", Color.Orange);
                 return;
             }
-
             if (!serialComm.IsOpen)
             {
                 _logOutput.Append("请先打开串口", Color.Orange);
                 return;
             }
+
             try
             {
                 dataGridView1.Rows.Clear();
                 DeviceInfo.Clear();
-                // 直接通过串口发送获取信息指令
-                string getInfoCmd = protocolLoader.Cmd_GetInfo;
-                serialComm.SendString(getInfoCmd);
+                serialComm.SendString(protocolLoader.Cmd_GetInfo);
                 _waitingForDeviceInfo = true;
                 _logOutput.Append("正在刷新设备信息", Color.LimeGreen);
             }
@@ -560,24 +449,19 @@ namespace QH_Firmware
         }
         #endregion
 
-        #region 打开高级设置窗口
+        #region 高级设置 & 重启
         private void advancedSettingButton_Click(object sender, EventArgs e)
         {
-            // 打开密码窗口（显示在软件正中央）
-            Other_UI.password pwdForm = new Other_UI.password();
-            pwdForm.StartPosition = FormStartPosition.CenterParent; // 居中
-
+            password pwdForm = new password();
+            pwdForm.StartPosition = FormStartPosition.CenterParent;
             if (pwdForm.ShowDialog() == DialogResult.OK)
             {
-                // 密码正确 → 打开高级设置（也居中）
                 Advanced advanced = new Advanced(this);
                 advanced.StartPosition = FormStartPosition.CenterParent;
                 advanced.ShowDialog();
             }
         }
-        #endregion
 
-        #region 打开设备重启窗口
         private void resetbutton_Click(object sender, EventArgs e)
         {
             Reset frm = new Reset(serialComm, _logOutput, protocolLoader);
@@ -586,37 +470,28 @@ namespace QH_Firmware
         }
         #endregion
 
-        #region 退出软件
+        #region 退出 & 关于
         private void exitToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            // 弹出确认框
-            DialogResult result = MessageBox.Show(
-                "确定要退出软件吗？",
-                "退出确认",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Question);
-
-            if (result == DialogResult.Yes)
+            if (MessageBox.Show("确定退出？", "提示", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
             {
-                // 用户选择“是”，执行退出
-                Application.Exit();
+                // 安全关闭串口
+                serialComm.Close();
+                // 安全关闭窗体（不会卡死）
+                this.Close();
             }
-            // 选择“否”则什么都不做，程序继续运行
         }
-        #endregion
 
-        #region 关于
         private void aboutSoftwareToolStripMenuItem_Click(object sender, EventArgs e)
         {
-            QH_Firmware.SoftUI.About frm = new QH_Firmware.SoftUI.About();
-            frm.AppVersion = this.version;
-            frm.StartPosition = FormStartPosition.CenterParent; // 窗口居中
-            frm.ShowDialog(); // 模态打开（必须关闭此窗口才能操作主界面）
+            About frm = new About();
+            frm.AppVersion = version;
+            frm.StartPosition = FormStartPosition.CenterParent;
+            frm.ShowDialog();
         }
-
         #endregion
 
-        #region  加载固件、开始固化
+        #region 固件升级
         private void loadFileButton_Click(object sender, EventArgs e)
         {
             progressBar1.Value = 0;
@@ -624,19 +499,16 @@ namespace QH_Firmware
             {
                 ofd.Filter = "固件文件 (*.bin;*.hex)|*.bin;*.hex";
                 ofd.Title = "选择固件";
-
                 if (ofd.ShowDialog() == DialogResult.OK)
                 {
                     string filePath = ofd.FileName;
                     string area = comboBox3.Text.Trim();
                     string deviceModel = textBox1.Text.Trim();
-
                     _floading.LoadFirmware(filePath, area, deviceModel);
                     fileNameLabel.Text = $"文件名：{_floading.FileName}";
                 }
             }
         }
-        
 
         private void burnButton_Click(object sender, EventArgs e)
         {
@@ -645,17 +517,13 @@ namespace QH_Firmware
                 MessageBox.Show("请先加载固件！");
                 return;
             }
-
             if (!serialComm.IsOpen)
             {
                 MessageBox.Show("请先打开串口！");
                 return;
             }
-
-            //_logOutput.Append("开始升级固件...", System.Drawing.Color.LimeGreen);
             _floading.StartUpgrade();
         }
         #endregion
-
     }
 }

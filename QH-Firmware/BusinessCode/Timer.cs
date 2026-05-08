@@ -1,27 +1,56 @@
 ﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-// 自动发送定时器：握手 → 验证应答 → 定时获取信息
+
 namespace QH_Firmware
 {
     /// <summary>
-    /// 自动发送定时器（握手 → 验证应答 → 定时获取信息）
+    /// 自动发送定时器
+    /// 功能：握手流程 → 验证应答 → 定时获取设备信息
     /// </summary>
     public class AutoSendTimer
     {
+        #region 私有变量
+        /// <summary>
+        /// 定时发送组件
+        /// </summary>
         private readonly Timer _timer;
+
+        /// <summary>
+        /// 串口通信对象
+        /// </summary>
         private readonly SerialCommunication _serialComm;
+
+        /// <summary>
+        /// 协议加载对象
+        /// </summary>
         private readonly ProtocolLoading _protocolLoader;
+
+        /// <summary>
+        /// 日志输出对象
+        /// </summary>
         private readonly LogOutput _logOutput;
 
+        /// <summary>
+        /// 握手是否成功
+        /// </summary>
         private bool _isHandshakeSuccess;
 
-
-        // 保存握手所需的参数
+        /// <summary>
+        /// 设备型号（握手参数）
+        /// </summary>
         private string _deviceModel;
-        private string _firmwareRegion;
 
+        /// <summary>
+        /// 固件区域（握手参数）
+        /// </summary>
+        private string _firmwareRegion;
+        #endregion
+
+        #region 构造函数
+        /// <summary>
+        /// 构造函数：注入依赖
+        /// </summary>
         public AutoSendTimer(SerialCommunication serialComm, ProtocolLoading protocolLoader, LogOutput logOutput)
         {
             _serialComm = serialComm;
@@ -32,39 +61,41 @@ namespace QH_Firmware
             _timer.Tick += OnTimerTick;
             _isHandshakeSuccess = false;
         }
+        #endregion
 
+        #region 启动 / 停止
         /// <summary>
-        /// 启动握手流程，并传入参数
+        /// 启动握手流程
         /// </summary>
+        /// <param name="deviceModel">设备型号</param>
+        /// <param name="firmwareRegion">固件区域</param>
         public void StartHandshake(string deviceModel, string firmwareRegion)
         {
             Stop();
             _isHandshakeSuccess = false;
 
-            // 保存传入的参数
+            // 保存握手参数
             _deviceModel = deviceModel;
             _firmwareRegion = firmwareRegion;
 
+            // 设置握手间隔
             int interval = _protocolLoader.Interval_Handshake > 0 ? _protocolLoader.Interval_Handshake : 1000;
             _timer.Interval = interval;
             _timer.Start();
-
-            //_logOutput.Append("[自动流程] 开始握手...", Color.Cyan);
         }
 
         /// <summary>
-        /// 握手成功，切换到获取设备信息模式
+        /// 握手成功，切换到定时获取设备信息模式
         /// </summary>
         public void SwitchToGetInfoMode()
         {
-            if (_isHandshakeSuccess) return;
+            if (_isHandshakeSuccess)
+                return;
 
-            // 标记握手成功
             _isHandshakeSuccess = true;
-
             _logOutput.Append("握手成功", Color.LimeGreen);
 
-            // 2. 使用协议中的 Interval_GetInfo 启动定时发送
+            // 设置获取信息的间隔
             int interval = _protocolLoader.Interval_GetInfo > 0 ? _protocolLoader.Interval_GetInfo : 1000;
             _timer.Interval = interval;
             _timer.Start();
@@ -77,12 +108,15 @@ namespace QH_Firmware
         {
             _timer.Stop();
         }
+        #endregion
 
+        #region 定时器核心逻辑
         /// <summary>
-        /// 定时器核心发送逻辑
+        /// 定时器触发：未握手 → 发握手；已握手 → 发获取信息
         /// </summary>
         private void OnTimerTick(object sender, EventArgs e)
         {
+            // 串口未打开则停止
             if (!_serialComm.IsOpen)
             {
                 Stop();
@@ -91,55 +125,48 @@ namespace QH_Firmware
 
             if (!_isHandshakeSuccess)
             {
-                // 发送握手指令
+                // 发送握手指令（替换参数）
                 if (!string.IsNullOrEmpty(_protocolLoader.Cmd_Handshake))
                 {
-
-                    // 从类的私有字段获取参数，不再直接访问UI控件
-                    // 【只发握手】
                     string finalCmd = _protocolLoader.Cmd_Handshake
                         .Replace("{device_model}", _deviceModel)
-                        .Replace("{firmware_region}", _firmwareRegion)
-                        +"\r\n";
+                        .Replace("{firmware_region}", _firmwareRegion) + "\r\n";
 
                     _serialComm.SendString(finalCmd);
                 }
             }
             else
             {
-                // 【握手成功后 → 只发获取信息，再也不发握手】
+                // 握手成功后，定时获取设备信息
                 _serialComm.SendString(_protocolLoader.Cmd_GetInfo);
             }
         }
+        #endregion
 
+        #region 握手应答验证
         /// <summary>
-        /// 验证接收的字符串是否为握手成功应答（严格大小写 + 清除空白字符）
+        /// 验证接收数据是否匹配握手应答（清除空白 + 严格匹配）
         /// </summary>
         public bool CheckHandshakeAck(string recvData)
         {
-            if (_isHandshakeSuccess) return true;
-            if (string.IsNullOrEmpty(_protocolLoader.Ack_Handshake)) return false;
+            if (_isHandshakeSuccess)
+                return true;
+
+            if (string.IsNullOrEmpty(_protocolLoader.Ack_Handshake))
+                return false;
 
             try
             {
-                // 1. 生成【预期的正确应答】
+                // 生成预期应答（替换参数）
                 string expectedAck = _protocolLoader.Ack_Handshake
                     .Replace("{device_model}", _deviceModel)
                     .Replace("{firmware_region}", _firmwareRegion);
 
-                // 2. 清除所有空白：空格、换行、回车、制表符
+                // 清除空白字符后严格对比
                 string recvClean = RemoveAllWhitespace(recvData);
                 string expectClean = RemoveAllWhitespace(expectedAck);
 
-                // 3. 严格大小写对比
-                bool isMatch = recvClean.Equals(expectClean);
-
-                if (isMatch)
-                {
-                    //_logOutput.Append("[握手] 验证成功 → 准备获取设备信息", Color.LimeGreen);
-                }
-
-                return isMatch;
+                return recvClean.Equals(expectClean);
             }
             catch
             {
@@ -148,18 +175,18 @@ namespace QH_Firmware
         }
 
         /// <summary>
-        /// 清除所有空白字符（空格、\r、\n、\t）
+        /// 清除所有空白字符：空格、回车、换行、制表符
         /// </summary>
         private string RemoveAllWhitespace(string str)
         {
-            if (string.IsNullOrEmpty(str)) return "";
-            return str
-                .Replace(" ", "")
-                .Replace("\r", "")
-                .Replace("\n", "")
-                .Replace("\t", "");
+            if (string.IsNullOrEmpty(str))
+                return string.Empty;
+
+            return str.Replace(" ", "")
+                      .Replace("\r", "")
+                      .Replace("\n", "")
+                      .Replace("\t", "");
         }
-
-
+        #endregion
     }
 }

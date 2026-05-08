@@ -115,7 +115,6 @@ namespace QH_Firmware
             this.fileToolStripMenuItem.Name = "fileToolStripMenuItem";
             this.fileToolStripMenuItem.Size = new System.Drawing.Size(70, 32);
             this.fileToolStripMenuItem.Text = "文件";
-            this.fileToolStripMenuItem.Click += new System.EventHandler(this.文件FToolStripMenuItem_Click);
             // 
             // loadProtocolToolStripMenuItem
             // 
