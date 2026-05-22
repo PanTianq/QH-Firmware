@@ -54,6 +54,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="BusinessCode\CRC16.cs" />
     <Compile Include="BusinessCode\Floading.cs" />
     <Compile Include="BusinessCode\informationParsing.cs" />
     <Compile Include="BusinessCode\LogOutput.cs" />

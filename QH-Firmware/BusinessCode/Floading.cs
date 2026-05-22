@@ -37,8 +37,8 @@ namespace QH_Firmware
             }
         }
 
-        // 固件校验和
-        public uint Checksum { get; private set; }
+        // CRC16-CCITT 校验值
+        public ushort CRC16Value { get; private set; }
 
         // 串口通信对象
         private readonly SerialCommunication _serialComm;
@@ -91,66 +91,50 @@ namespace QH_Firmware
         /// </summary>
         private void StartWaitAck()
         {
-            // 已经超时，不再执行
             if (_isTimeoutError)
                 return;
 
-            // 停止上一次的超时检测任务，避免多任务并发
             StopWaitAck();
-
-            // 记录发送时间
             _lastSendTime = DateTime.Now;
-
-            // 新建超时检测任务
             _cts = new CancellationTokenSource();
             Task.Run(() => WaitAckTimeoutCheck(_cts.Token));
         }
 
         /// <summary>
-        /// 停止等待应答（收到应答/超时/关闭串口时调用）
+        /// 停止等待应答
         /// </summary>
         private void StopWaitAck()
         {
             if (_cts != null)
             {
-                _cts.Cancel();       // 取消任务
-                _cts.Dispose();      // 释放资源
-                _cts = null;         // 清空引用
+                _cts.Cancel();
+                _cts.Dispose();
+                _cts = null;
             }
         }
 
         /// <summary>
         /// 超时检测循环
-        /// 功能：等待设备应答，超时则关闭串口并提示
         /// </summary>
         private async void WaitAckTimeoutCheck(CancellationToken token)
         {
             try
             {
-                // 在未取消、未超时的情况下持续检测
                 while (!token.IsCancellationRequested && !_isTimeoutError)
                 {
                     await Task.Delay(500, token);
 
-                    // 判断是否超时
                     if ((DateTime.Now - _lastSendTime).TotalSeconds > _ackTimeout)
                     {
                         _isTimeoutError = true;
                         StopWaitAck();
-
-                        // 超时提示（只打印一次）
                         _logOutput.Append($"[超时] 设备未应答，超时 {_ackTimeout} 秒！已自动关闭串口", Color.Orange);
-
-                        // 超时关闭串口
                         _serialComm.Close();
                         return;
                     }
                 }
             }
-            catch (OperationCanceledException)
-            {
-                // 任务被正常取消，无需处理
-            }
+            catch (OperationCanceledException) { }
         }
 
         /// <summary>
@@ -164,7 +148,7 @@ namespace QH_Firmware
                 switch (tipType)
                 {
                     case "LoadSuccess":
-                        baseTip = $"固件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}";
+                        baseTip = $"固件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets} | CRC16-CCITT: 0x{CRC16Value:X4}";
                         break;
                     case "BurnSuccess":
                         baseTip = "固件烧写成功！";
@@ -182,7 +166,7 @@ namespace QH_Firmware
                 switch (tipType)
                 {
                     case "LoadSuccess":
-                        baseTip = $"参数文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}";
+                        baseTip = $"参数文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets} | CRC16-CCITT: 0x{CRC16Value:X4}";
                         break;
                     case "BurnSuccess":
                         baseTip = "参数写入成功！";
@@ -200,7 +184,7 @@ namespace QH_Firmware
                 switch (tipType)
                 {
                     case "LoadSuccess":
-                        baseTip = $"文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets}";
+                        baseTip = $"文件加载成功：{FileName} | 大小：{FileSize} 字节 | 总包：{TotalPackets} | CRC16-CCITT: 0x{CRC16Value:X4} ";
                         break;
                     case "BurnSuccess":
                         baseTip = "文件写入成功！";
@@ -226,7 +210,6 @@ namespace QH_Firmware
                 _currentArea = area;
                 _isTimeoutError = false;
 
-                // 校验文件格式
                 string ext = Path.GetExtension(filePath).ToLower();
                 if (ext != ".bin" && ext != ".hex")
                 {
@@ -234,7 +217,6 @@ namespace QH_Firmware
                     return false;
                 }
 
-                // 校验应用程序固件文件名是否包含设备型号
                 string fileName = Path.GetFileName(filePath);
                 if (area == "应用程序(R1)" && !string.IsNullOrWhiteSpace(deviceModel) && !fileName.Contains(deviceModel.Trim()))
                 {
@@ -242,16 +224,15 @@ namespace QH_Firmware
                     return false;
                 }
 
-                // 读取文件并初始化
                 FirmwareData = File.ReadAllBytes(filePath);
                 FileName = fileName;
-                Checksum = CalculateChecksum(FirmwareData);
+
+                // ====================== 这里换成 CRC16-CCITT ======================
+                CRC16Value = CRC16.CalculateCCITT(FirmwareData);
+
                 _deviceReadyResponded = false;
 
-                // 加载成功日志
                 _logOutput.Append(GetLogTip("LoadSuccess"), Color.LimeGreen);
-
-                // 发送设备就绪命令
                 SendDeviceReadyCommand();
                 return true;
             }
@@ -270,7 +251,8 @@ namespace QH_Firmware
             try
             {
                 string prefix = _protocolLoader.Cmd_FirmwareHeader.Split('{')[0].Trim();
-                string sendCmd = $"{prefix} {TotalPackets} 0x{Checksum:X8}";
+                // 发送 CRC16（4位16进制）
+                string sendCmd = $"{prefix} {TotalPackets} 0x{CRC16Value:X4}";
                 _serialComm.SendString(sendCmd);
                 StartWaitAck();
             }
@@ -285,18 +267,15 @@ namespace QH_Firmware
         /// </summary>
         public void StartUpgrade()
         {
-            // 已超时、串口关闭、无文件 → 退出
             if (_isTimeoutError || !_serialComm.IsOpen || FirmwareData == null)
                 return;
 
-            // 设备未准备好 → 提示
             if (!_deviceReadyResponded)
             {
                 _logOutput.Append("设备未就绪", Color.Orange);
                 return;
             }
 
-            // 从第0包开始发送
             _currentPacketIndex = 0;
             OnProgressChanged?.Invoke(0);
             SendNextPacket();
@@ -310,7 +289,6 @@ namespace QH_Firmware
             if (_isTimeoutError || !_serialComm.IsOpen)
                 return;
 
-            // 所有包发送完毕，直接进入写入信息步骤（不再提示上传完成）
             if (_currentPacketIndex >= TotalPackets)
             {
                 OnProgressChanged?.Invoke(100);
@@ -318,28 +296,29 @@ namespace QH_Firmware
                 return;
             }
 
-            // 组包：头 + 数据
             int start = _currentPacketIndex * PACKET_SIZE;
             int dataLen = Math.Min(PACKET_SIZE, FirmwareData.Length - start);
             byte[] firmwarePacket = new byte[dataLen];
             Array.Copy(FirmwareData, start, firmwarePacket, 0, dataLen);
 
-            // 拼接协议头
             string loadhead = _protocolLoader.Cmd_FirmwareHeader.Split('{')[0].Trim();
             string header = $"{loadhead} {TotalPackets} {_currentPacketIndex + 1} {dataLen} ";
             byte[] headerBytes = Encoding.ASCII.GetBytes(header);
 
-            // 合并发送数据
             byte[] sendData = new byte[headerBytes.Length + firmwarePacket.Length];
             Array.Copy(headerBytes, sendData, headerBytes.Length);
             Array.Copy(firmwarePacket, 0, sendData, headerBytes.Length, firmwarePacket.Length);
 
-            // 发送并等待应答
             _serialComm.Send(sendData);
             StartWaitAck();
 
-            // 更新进度
-            int progress = (int)((_currentPacketIndex + 1) * 100.0 / TotalPackets);
+            // ------------------------------
+            // 【新增】发包进度日志（青色）
+            // ------------------------------
+            int pkgNo = _currentPacketIndex + 1;
+            int progress = (int)(pkgNo * 100.0 / TotalPackets);
+            _logOutput.Append($"[发包] 第 {pkgNo}/{TotalPackets} 包 | 大小：{dataLen} 字节 | 进度 {progress}%", Color.Cyan);
+
             OnProgressChanged?.Invoke(progress);
         }
 
@@ -351,25 +330,18 @@ namespace QH_Firmware
             if (_isTimeoutError || !_serialComm.IsOpen)
                 return;
 
-
             string recv = Encoding.ASCII.GetString(buffer).Trim();
             string ackInform = _protocolLoader.Ack_SetInfo.Trim();
 
-            // 最终烧写完成应答
             if (recv.Contains(ackInform))
             {
-                // 收到应答 → 立即停止超时检测
                 StopWaitAck();
                 _logOutput.Append(GetLogTip("BurnSuccess"), Color.LimeGreen);
                 return;
             }
 
-            //StopWaitAck();
-
-            // 去掉空格方便匹配
             string clean = recv.Replace(" ", "");
 
-            // 处理：设备就绪应答
             if (!_deviceReadyResponded)
             {
                 string ackReady = _protocolLoader.Ack_FirmwareHeader.Split('{')[0].Trim().Replace(" ", "");
@@ -383,7 +355,6 @@ namespace QH_Firmware
                 return;
             }
 
-            // 处理：数据包应答
             if (_deviceReadyResponded)
             {
                 int pkgNo = _currentPacketIndex + 1;
@@ -399,25 +370,13 @@ namespace QH_Firmware
         }
 
         /// <summary>
-        /// 计算文件校验和
-        /// </summary>
-        private uint CalculateChecksum(byte[] data)
-        {
-            uint sum = 0;
-            foreach (byte b in data)
-                sum += b;
-
-            return sum;
-        }
-
-        /// <summary>
-        /// 清空所有状态，用于重新升级
+        /// 清空所有状态
         /// </summary>
         public void Clear()
         {
             FirmwareData = null;
             FileName = string.Empty;
-            Checksum = 0;
+            CRC16Value = 0;
             _currentPacketIndex = 0;
             _deviceReadyResponded = false;
             _isTimeoutError = false;
@@ -425,7 +384,7 @@ namespace QH_Firmware
         }
 
         /// <summary>
-        /// 发送更新信息（时间/文件名），并加入20秒超时
+        /// 发送更新信息
         /// </summary>
         private void SendUpdateInformCommand()
         {
@@ -437,19 +396,18 @@ namespace QH_Firmware
                 string cmdHead = _protocolLoader.Cmd_SetInfo.Split('{')[0].Trim();
                 string cmd;
 
-                // 根据区域发送不同信息
                 if (_currentArea == "应用程序(R1)")
                 {
                     cmd = $"{cmdHead} {{#DEV_INFO:ABT={DateTime.Now:yyyy-MM-dd HH:mm:ss};}}";
-                }  
-                else if(_currentArea == "程序参数")
+                }
+                else if (_currentArea == "程序参数")
                 {
                     cmd = $"{cmdHead} {{#DEV_INFO:PFN={FileName};}}";
                 }
-                else 
+                else
                 {
                     cmd = $"{cmdHead} {{#DEV_INFO:ABT={DateTime.Now:yyyy-MM-dd HH:mm:ss};}}";
-                }  
+                }
                 _serialComm.SendString(cmd);
                 StartWaitAck();
             }

@@ -6,33 +6,33 @@
   "commands": [
     {
       "name": "握手",
-      "command": "update link {device_model} {firmware_region}",
+      "command": "update link {device_model} {firmware_region} ",
       "interval": 5,
-      "confirmation": "update link {device_model} {firmware_region} ok"
+      "confirmation": "update link {device_model} {firmware_region} ok "
     },
     {
       "name": "获取设备信息",
-      "command": "update inform 0",
+      "command": "update inform 0 ",
       "interval": 50,
-      "confirmation": "update inform 0 {device_info_read} ok"
+      "confirmation": "update inform 0 {device_info_read} ok "
     },
     {
       "name": "写入设备信息",
-      "command": "update inform 1 {device_info_write}",
+      "command": "update inform 1 {device_info_write} ",
       "interval": 0,
-      "confirmation": "update inform 1 ok"
+      "confirmation": "update inform 1 ok "
     },
     {
       "name": "固件头",
-      "command": "update load {total_packets} {current_packet}",
+      "command": "update load {total_packets} {current_packet} ",
       "interval": 0,
-      "confirmation": "update load {total_packets} {current_packet} ok"
+      "confirmation": "update load {total_packets} {current_packet} ok "
     },
     {
       "name": "设备软重启",
-      "command": "update control 1",
+      "command": "update control 1 ",
       "interval": 0,
-      "confirmation": "update control 1 ok"
+      "confirmation": "update control 1 ok "
     }
   ],
   "variables": {

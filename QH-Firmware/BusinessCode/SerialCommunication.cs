@@ -172,7 +172,8 @@ namespace QH_Firmware
                     LogReceived?.Invoke("[错误] 串口未打开，无法发送", Color.Orange);
                     return;
                 }
-
+                string sendStr = Encoding.ASCII.GetString(data);
+                LogReceived?.Invoke($"[发送] {sendStr}", Color.Cyan);
                 _serialPort.Write(data, 0, data.Length);
             }
             catch (Exception ex)
@@ -253,6 +254,8 @@ namespace QH_Firmware
 
                     if (readLen > 0)
                     {
+                        string recvStr = Encoding.ASCII.GetString(buffer, 0, readLen);
+                        LogReceived?.Invoke($"[接收] {recvStr}", Color.Blue);
                         DataReceived?.Invoke(buffer);
                     }
                 }
